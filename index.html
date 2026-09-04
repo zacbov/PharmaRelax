@@ -1,0 +1,1137 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Clairière — Relaxation VR</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0a1f14">
+<style>
+  html, body { margin:0; padding:0; overflow:hidden; background:#000; height:100%; }
+  canvas { display:block; }
+  #overlay {
+    position:fixed; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; color:#eafff0;
+    font-family: system-ui, sans-serif; background:radial-gradient(ellipse at center, #123322, #04140b);
+    z-index: 10;
+  }
+  #overlay h1 { font-weight:300; letter-spacing:2px; margin-bottom:8px; }
+  #overlay p { opacity:0.7; margin-top:0; max-width: 420px; text-align:center; font-size:14px; }
+  #enterBtn {
+    margin-top:24px; padding:16px 40px; font-size:18px; border-radius:40px;
+    border:1px solid #6fd39a; background:rgba(111,211,154,0.12); color:#eafff0;
+    cursor:pointer; letter-spacing:1px; transition: all 0.2s;
+  }
+  #enterBtn:hover { background:rgba(111,211,154,0.25); }
+  #loadBar { width:280px; height:4px; background:rgba(255,255,255,0.15); border-radius:2px; margin-top:26px; overflow:hidden; }
+  #loadFill { height:100%; width:0%; background:#6fd39a; transition:width 0.2s; }
+  #status { position:fixed; bottom:10px; left:10px; color:#8fd; font:12px monospace; opacity:0.5; z-index:5; }
+</style>
+</head>
+<body>
+
+<div id="overlay">
+  <h1>🌿 Clairière</h1>
+  <p>Un espace de calme en réalité virtuelle. Mets ton casque, appuie sur le bouton, et laisse-toi porter par la forêt.</p>
+  <button id="enterBtn">Entrer en VR</button>
+  <button id="enterArBtn" style="margin-top:12px; padding:10px 28px; font-size:14px; border-radius:30px; border:1px solid rgba(111,211,154,0.4); background:transparent; color:#c8ecd8; cursor:pointer;">📱 Essayer en AR (téléphone)</button>
+  <div id="loadBar"><div id="loadFill"></div></div>
+  <p style="font-size:12px;opacity:0.5;margin-top:20px;">Aucun déplacement requis — reste simplement assis ou debout et regarde autour de toi.</p>
+  <p style="font-size:11px;opacity:0.4;margin-top:6px;">L'AR téléphone nécessite Chrome sur Android (ARCore). Utile pour prévisualiser sans casque.</p>
+</div>
+<div id="status"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+    "@mkkellogg/gaussian-splats-3d": "https://unpkg.com/@mkkellogg/gaussian-splats-3d@0.4.6/build/gaussian-splats-3d.module.js"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { VRButton } from 'three/addons/webxr/VRButton.js';
+import { ARButton } from 'three/addons/webxr/ARButton.js';
+import * as GaussianSplats3D from '@mkkellogg/gaussian-splats-3d';
+
+const statusEl = document.getElementById('status');
+const loadFill = document.getElementById('loadFill');
+const log = (m) => { statusEl.textContent = m; console.log(m); };
+
+// ===================== CONFIG =====================
+const XENO_CANTO_KEY = 'c8e0566ba6f028debbca0f13853898559847c82e';
+// Espèce de jour (chant via Xeno-canto) et sons de nuit (CC0, fixes)
+const BIRD_SPECIES_LIST = [
+  { common: 'Rougegorge familier', scientific: 'Erithacus rubecula' },
+  { common: 'Merle noir', scientific: 'Turdus merula' },
+  { common: 'Mésange charbonnière', scientific: 'Parus major' },
+  { common: 'Pinson des arbres', scientific: 'Fringilla coelebs' },
+  { common: 'Rossignol philomèle', scientific: 'Luscinia megarhynchos' },
+  { common: 'Chardonneret élégant', scientific: 'Carduelis carduelis' },
+];
+const BIRD_CYCLE_INTERVAL = 20; // secondes entre chaque nouvel oiseau
+const NIGHT_SKY_URL = 'https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/dikhololo_night.jpg';
+const OWL_SOUND_URL = 'https://bigsoundbank.com/UPLOAD/mp3/0429.mp3';
+const CICADA_SOUND_URL = 'https://bigsoundbank.com/UPLOAD/mp3/3002.mp3';
+
+// ===================== SCENE =====================
+const scene = new THREE.Scene();
+
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.05, 200);
+const rig = new THREE.Group();
+rig.add(camera);
+rig.position.set(0, 0, 0); // sur Quest 3/2, le repère 'local-floor' gère déjà la hauteur réelle
+scene.add(rig);
+
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.xr.enabled = true;
+renderer.xr.setReferenceSpaceType('local-floor'); // évite le flottement : origine = sol réel
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.9;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0xbfe3c8, 0x2b1f14, 0.6));
+const sun = new THREE.DirectionalLight(0xfff2d0, 0.8);
+sun.position.set(5, 8, 3);
+scene.add(sun);
+
+// Brouillard doux : profondeur, cohérence avec le décor forêt
+scene.fog = new THREE.FogExp2(0x9fc2a8, 0.045);
+
+// ===================== SKYBOX (jour EXR / nuit JPG) =====================
+const exrLoader = new EXRLoader();
+const texLoader = new THREE.TextureLoader();
+let dayTexture = null;
+let nightTexture = null;
+
+exrLoader.load('./assets/env/mossy_forest_4k.exr', (texture) => {
+  texture.mapping = THREE.EquirectangularReflectionMapping;
+  texture.colorSpace = THREE.LinearSRGBColorSpace;
+  dayTexture = texture;
+  scene.background = texture;
+  scene.environment = texture;
+  log('Décor forêt (jour) chargé');
+}, (xhr) => {
+  if (xhr.total) loadFill.style.width = Math.min(100, (xhr.loaded/xhr.total*100)).toFixed(0) + '%';
+}, (err) => log('Erreur EXR: ' + err.message));
+
+// ===================== SOL (fallback + nuage de points) =====================
+const ground = new THREE.Mesh(
+  new THREE.CircleGeometry(30, 48),
+  new THREE.MeshStandardMaterial({ color: 0x2e4a30, roughness: 1, transparent:true, opacity:0.4 })
+);
+ground.rotation.x = -Math.PI/2;
+ground.position.y = -0.02;
+scene.add(ground);
+
+// lupin.ply retiré : trop lourd (99K points bruts) pour un rendu Quest 2 fluide.
+// On passe sur des Gaussian Splats allégés à la place (voir ASSET_LIBRARY plus bas).
+
+// ===================== RAYONS DE LUMIÈRE VOLUMÉTRIQUES (god rays légers) =====================
+// Technique légère sans post-processing : texture en dégradé radial (longueur ET
+// largeur, pour un bord doux plutôt qu'un rectangle net), rendu additif.
+function makeRayTexture() {
+  const w = 64, h = 128;
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  // Dégradé vertical (intensité qui décroît vers le bas du rayon)
+  ctx.fillStyle = (() => {
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, 'rgba(255,244,200,0.55)');
+    g.addColorStop(0.7, 'rgba(255,244,200,0.15)');
+    g.addColorStop(1, 'rgba(255,244,200,0)');
+    return g;
+  })();
+  ctx.fillRect(0, 0, w, h);
+  // Masque horizontal (dégradé radial) pour adoucir les bords latéraux —
+  // évite l'effet "rectangle plat" visible de face en VR
+  ctx.globalCompositeOperation = 'destination-in';
+  const maskGrad = ctx.createRadialGradient(w/2, h*0.35, 0, w/2, h*0.35, w/2);
+  maskGrad.addColorStop(0, 'rgba(255,255,255,1)');
+  maskGrad.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = maskGrad;
+  ctx.fillRect(0, 0, w, h);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+const rayTexture = makeRayTexture();
+const rayMat = new THREE.MeshBasicMaterial({
+  map: rayTexture, transparent:true, depthWrite:false, side:THREE.DoubleSide,
+  blending: THREE.AdditiveBlending, fog:false
+});
+const sunDir = new THREE.Vector3(5, 8, 3).normalize();
+const godRaysGroup = new THREE.Group();
+const rays = [];
+const RAY_COUNT = 4; // moins nombreux mais plus doux = plus crédible que beaucoup de rayons francs
+for (let i = 0; i < RAY_COUNT; i++) {
+  const height = 2.6 + Math.random()*1.2;
+  const width = 0.4 + Math.random()*0.35; // plus large, pour un dégradé plus progressif
+  const geo = new THREE.PlaneGeometry(width, height);
+  geo.translate(0, -height/2, 0); // pivot en haut du rayon
+  const ray = new THREE.Mesh(geo, rayMat.clone());
+  const spread = 2.2;
+  ray.position.set(
+    sunDir.x * 3 + (Math.random()-0.5)*spread,
+    3.0 + Math.random()*0.6,
+    sunDir.z * 3 + (Math.random()-0.5)*spread - 1
+  );
+  ray.userData = {
+    baseOpacity: 0.35 + Math.random()*0.2, // plus subtil qu'avant
+    flickerSeed: Math.random()*100, swaySeed: Math.random()*100
+  };
+  godRaysGroup.add(ray);
+  rays.push(ray);
+}
+scene.add(godRaysGroup);
+function updateGodRays(t) {
+  rays.forEach(r => {
+    // Billboard partiel vers la caméra sur l'axe Y : évite l'effet "plan vu de
+    // tranche" qui révèle la platitude en vision stéréo, tout en gardant une
+    // direction générale cohérente avec le soleil (mélange 60% soleil / 40% caméra)
+    const toCam = camera.getWorldPosition(new THREE.Vector3()).sub(r.position).setY(0).normalize();
+    const blended = sunDir.clone().setY(0).normalize().multiplyScalar(0.6).addScaledVector(toCam, 0.4).normalize();
+    const angle = Math.atan2(blended.x, blended.z);
+    r.rotation.y = angle;
+    r.rotation.x = -0.25; // incliné vers le bas, façon rayon qui traverse la canopée
+
+    const flicker = 0.85 + Math.sin(t*0.6 + r.userData.flickerSeed) * 0.15;
+    r.material.opacity = r.userData.baseOpacity * flicker * (dayNightState.isNight ? 0.1 : 1);
+    r.rotation.z = Math.sin(t*0.15 + r.userData.swaySeed) * 0.03;
+  });
+}
+// Texture radiale douce générée par canvas (pas de fichier externe nécessaire)
+function makeRadialTexture(inner, outer) {
+  const size = 128;
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  const grad = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
+  grad.addColorStop(0, inner);
+  grad.addColorStop(1, outer);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// Brume : billboards VERTICAUX qui pivotent pour toujours faire face au
+// spectateur (axe Y uniquement). Des plans posés à plat au sol se voient "de
+// tranche" à hauteur d'œil en VR stéréo, ce qui révèle immédiatement qu'ils
+// sont plats — les billboards verticaux évitent complètement ce problème.
+const mistTexture = makeRadialTexture('rgba(235,240,238,0.55)', 'rgba(235,240,238,0)');
+const mistGroup = new THREE.Group();
+for (let i = 0; i < 7; i++) {
+  const mist = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.8 + Math.random()*1.2, 0.9 + Math.random()*0.5),
+    new THREE.MeshBasicMaterial({ map: mistTexture, transparent:true, opacity:0.3, depthWrite:false, fog:false })
+  );
+  mist.renderOrder = 1;
+  const ang = Math.random() * Math.PI * 2;
+  const dist = 1.8 + Math.random() * 4;
+  mist.position.set(Math.cos(ang)*dist, 0.15 + Math.random()*0.25, Math.sin(ang)*dist);
+  mist.userData = { driftSpeed: 0.025 + Math.random()*0.03, driftAngle: Math.random()*Math.PI*2 };
+  mistGroup.add(mist);
+}
+scene.add(mistGroup);
+
+// ===================== PARTICULES DE POLLEN / POUSSIÈRE DE LUMIÈRE =====================
+const pollenTexture = makeRadialTexture('rgba(255,250,220,0.9)', 'rgba(255,250,220,0)');
+const POLLEN_COUNT = 140;
+const pollenGeo = new THREE.BufferGeometry();
+const pollenPos = new Float32Array(POLLEN_COUNT * 3);
+const pollenSeed = new Float32Array(POLLEN_COUNT);
+for (let i = 0; i < POLLEN_COUNT; i++) {
+  const ang = Math.random() * Math.PI * 2;
+  const r = Math.random() * 4.5;
+  pollenPos[i*3]   = Math.cos(ang) * r;
+  pollenPos[i*3+1] = Math.random() * 2.6;
+  pollenPos[i*3+2] = Math.sin(ang) * r;
+  pollenSeed[i] = Math.random() * 100;
+}
+pollenGeo.setAttribute('position', new THREE.BufferAttribute(pollenPos, 3));
+const pollenMat = new THREE.PointsMaterial({
+  map: pollenTexture, size: 0.045, transparent: true, opacity: 0.6,
+  depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true
+});
+const pollen = new THREE.Points(pollenGeo, pollenMat);
+scene.add(pollen);
+
+// ===================== OMBRES DE CONTACT (fausse AO sous les créatures volantes) =====================
+const shadowTexture = makeRadialTexture('rgba(10,20,10,0.5)', 'rgba(10,20,10,0)');
+function createContactShadow(baseScale=0.15) {
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(1, 1),
+    new THREE.MeshBasicMaterial({ map: shadowTexture, transparent:true, depthWrite:false, fog:false })
+  );
+  mesh.rotation.x = -Math.PI/2;
+  mesh.userData.baseScale = baseScale;
+  scene.add(mesh);
+  return mesh;
+}
+// Suit une créature au sol, s'assombrit/rétrécit avec la hauteur (ancrage visuel)
+function updateContactShadow(shadowMesh, target, groundY=0.01) {
+  if (!target.visible) { shadowMesh.visible = false; return; }
+  shadowMesh.visible = true;
+  shadowMesh.position.set(target.position.x, groundY, target.position.z);
+  const height = Math.max(0, target.position.y - groundY);
+  const falloff = THREE.MathUtils.clamp(1 - height / 2.2, 0.15, 1);
+  const s = shadowMesh.userData.baseScale * (0.6 + falloff * 0.4);
+  shadowMesh.scale.set(s, s, s);
+  shadowMesh.material.opacity = falloff * 0.6;
+}
+
+// ===================== AUDIO (binaural / positionnel) =====================
+const listener = new THREE.AudioListener();
+camera.add(listener);
+const audioLoader = new THREE.AudioLoader();
+
+function playPositionalSound(url, pos, volume=0.6, loop=false, fadeInDuration=0) {
+  const sound = new THREE.PositionalAudio(listener);
+  audioLoader.load(url, (buffer) => {
+    sound.setBuffer(buffer);
+    sound.setRefDistance(2);
+    sound.setLoop(loop);
+    sound.play();
+    if (fadeInDuration > 0) fadeInSound(sound, volume, fadeInDuration);
+    else sound.setVolume(volume);
+  });
+  const holder = new THREE.Object3D();
+  holder.position.copy(pos);
+  holder.add(sound);
+  scene.add(holder);
+  return sound;
+}
+
+// Ambiance de fond — sons CC0 (BigSoundBank), à déposer dans assets/audio/ :
+// - foret-ambiance.mp3 : https://bigsoundbank.com/UPLOAD/mp3/0100.mp3
+// - foret-ruisseau.mp3 : https://bigsoundbank.com/UPLOAD/mp3/2713.mp3
+const fadingValues = []; // { setter, from, target, start, duration, onComplete }
+function fadeValue(setter, target, duration, from=0) {
+  setter(from);
+  fadingValues.push({ setter, from, target, start: performance.now(), duration: duration*1000 });
+}
+function fadeValueTo(setter, from, target, duration, onComplete) {
+  fadingValues.push({ setter, from, target, start: performance.now(), duration: duration*1000, onComplete });
+}
+function fadeInSound(sound, targetVolume, duration=3) {
+  fadeValue((v) => sound.setVolume(v), targetVolume, duration);
+}
+// Fondu de sortie d'un son (depuis son volume actuel jusqu'à 0), avec arrêt à la fin
+function fadeOutSound(sound, duration=1.5) {
+  return new Promise((resolve) => {
+    const from = sound.getVolume ? sound.getVolume() : 1;
+    fadeValueTo((v) => sound.setVolume(v), from, 0, duration, () => {
+      if (sound.isPlaying) sound.stop();
+      resolve();
+    });
+  });
+}
+function updateFades() {
+  const now = performance.now();
+  for (let i = fadingValues.length - 1; i >= 0; i--) {
+    const f = fadingValues[i];
+    const p = Math.min(1, (now - f.start) / f.duration);
+    f.setter(f.from + (f.target - f.from) * p);
+    if (p >= 1) { fadingValues.splice(i, 1); if (f.onComplete) f.onComplete(); }
+  }
+}
+
+function startAmbience() {
+  // Lit de fond général, non positionnel (partout autour de soi), fondu à l'entrée
+  ambSound = new THREE.Audio(listener);
+  audioLoader.load('./assets/audio/foret-ambiance.mp3', (buffer) => {
+    ambSound.setBuffer(buffer); ambSound.setLoop(true); ambSound.play();
+    fadeInSound(ambSound, 0.3, 4);
+  }, undefined, () => log('Ajoute assets/audio/foret-ambiance.mp3 (voir bigsoundbank.com/UPLOAD/mp3/0100.mp3)'));
+
+  // Ruisseau positionnel, placé sur un côté pour un effet binaural marqué, fondu à l'entrée
+  streamSound = playPositionalSound('./assets/audio/foret-ruisseau.mp3', new THREE.Vector3(3, 0.2, -2), 0.5, true, 4);
+}
+
+// ===================== MATÉRIALISATION / DISSOLUTION =====================
+// Anime l'apparition d'un objet (splat, oiseau...) par un scale-in avec léger
+// rebond, accompagné d'une brève pluie d'étincelles pour un effet "dissolution".
+function easeOutBack(x) {
+  const c1 = 1.4, c3 = c1 + 1;
+  return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
+}
+const materializations = []; // { obj, targetScale, start, duration, onComplete }
+function materialize(obj, duration=2.2, onComplete=null) {
+  const targetScale = obj.scale.clone();
+  obj.scale.setScalar(0.0001);
+  obj.visible = true;
+  materializations.push({ obj, targetScale, start: performance.now(), duration: duration*1000, onComplete });
+  spawnSparkleBurst(obj.position.clone());
+}
+function updateMaterializations() {
+  const now = performance.now();
+  for (let i = materializations.length - 1; i >= 0; i--) {
+    const m = materializations[i];
+    const p = Math.min(1, (now - m.start) / m.duration);
+    const eased = easeOutBack(p);
+    m.obj.scale.set(m.targetScale.x*eased, m.targetScale.y*eased, m.targetScale.z*eased);
+    if (p >= 1) { m.obj.scale.copy(m.targetScale); materializations.splice(i, 1); if (m.onComplete) m.onComplete(); }
+  }
+}
+
+// Dissolution de sortie (symétrique de materialize) : rétrécit puis cache l'objet,
+// remet son échelle pleine (invisible) pour que le prochain materialize() reparte juste.
+const dematerializations = []; // { obj, fullScale, start, duration, onComplete }
+function dematerialize(obj, duration=1.3, onComplete=null) {
+  const fullScale = obj.scale.clone();
+  dematerializations.push({ obj, fullScale, start: performance.now(), duration: duration*1000, onComplete });
+}
+function updateDematerializations() {
+  const now = performance.now();
+  for (let i = dematerializations.length - 1; i >= 0; i--) {
+    const d = dematerializations[i];
+    const p = Math.min(1, (now - d.start) / d.duration);
+    const s = 1 - p;
+    d.obj.scale.set(d.fullScale.x*s, d.fullScale.y*s, d.fullScale.z*s);
+    if (p >= 1) {
+      d.obj.visible = false;
+      d.obj.scale.copy(d.fullScale); // pleine échelle mais invisible, prêt pour le prochain materialize()
+      dematerializations.splice(i, 1);
+      if (d.onComplete) d.onComplete();
+    }
+  }
+}
+
+const sparkleTexture = makeRadialTexture('rgba(255,255,235,1)', 'rgba(255,255,235,0)');
+function spawnSparkleBurst(position, count=26) {
+  const geo = new THREE.BufferGeometry();
+  const pos = new Float32Array(count*3);
+  const vel = new Float32Array(count*3);
+  for (let i = 0; i < count; i++) {
+    pos[i*3] = position.x; pos[i*3+1] = position.y; pos[i*3+2] = position.z;
+    const theta = Math.random()*Math.PI*2, phi = Math.random()*Math.PI;
+    const speed = 0.3 + Math.random()*0.4;
+    vel[i*3]   = Math.sin(phi)*Math.cos(theta)*speed;
+    vel[i*3+1] = Math.cos(phi)*speed + 0.2;
+    vel[i*3+2] = Math.sin(phi)*Math.sin(theta)*speed;
+  }
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const mat = new THREE.PointsMaterial({
+    map: sparkleTexture, size:0.05, transparent:true, opacity:1,
+    depthWrite:false, blending:THREE.AdditiveBlending
+  });
+  const points = new THREE.Points(geo, mat);
+  scene.add(points);
+  sparkleBursts.push({ points, vel, start: performance.now(), duration: 1200 });
+}
+const sparkleBursts = [];
+function updateSparkleBursts(dt) {
+  const now = performance.now();
+  for (let i = sparkleBursts.length - 1; i >= 0; i--) {
+    const b = sparkleBursts[i];
+    const p = (now - b.start) / b.duration;
+    if (p >= 1) { scene.remove(b.points); b.points.geometry.dispose(); b.points.material.dispose(); sparkleBursts.splice(i,1); continue; }
+    const arr = b.points.geometry.attributes.position.array;
+    for (let j = 0; j < b.vel.length/3; j++) {
+      arr[j*3]   += b.vel[j*3]   * dt;
+      arr[j*3+1] += (b.vel[j*3+1] - 0.6*p) * dt; // légère gravité
+      arr[j*3+2] += b.vel[j*3+2] * dt;
+    }
+    b.points.geometry.attributes.position.needsUpdate = true;
+    b.points.material.opacity = 1 - p;
+  }
+}
+
+// ===================== PANNEAU PÉDAGOGIQUE (texte flottant) =====================
+function createInfoPanel(title, body, subtitle='') {
+  const canvas = document.createElement('canvas');
+  canvas.width = 640; canvas.height = 320;
+  const texture = new THREE.CanvasTexture(canvas);
+  const material = new THREE.MeshBasicMaterial({ map: texture, transparent:true, opacity:0, depthWrite:false });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.4), material);
+  mesh.visible = false;
+  scene.add(mesh);
+  const panel = { mesh, material, canvas, texture };
+  drawInfoPanel(panel, title, body, subtitle);
+  return panel;
+}
+function drawInfoPanel(panel, title, body, subtitle='') {
+  const canvas = panel.canvas;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = 'rgba(10, 28, 18, 0.72)';
+  roundRect(ctx, 8, 8, canvas.width-16, canvas.height-16, 24); ctx.fill();
+  ctx.strokeStyle = 'rgba(150, 220, 180, 0.5)'; ctx.lineWidth = 2;
+  roundRect(ctx, 8, 8, canvas.width-16, canvas.height-16, 24); ctx.stroke();
+
+  ctx.fillStyle = '#eafff0';
+  ctx.font = '600 34px system-ui, sans-serif';
+  ctx.fillText(title, 36, 58);
+
+  let bodyStartY = 108;
+  if (subtitle) {
+    ctx.font = 'italic 20px system-ui, sans-serif';
+    ctx.fillStyle = 'rgba(200,235,210,0.75)';
+    ctx.fillText(subtitle, 36, 86);
+    bodyStartY = 122;
+  }
+
+  ctx.font = '20px system-ui, sans-serif';
+  ctx.fillStyle = 'rgba(234,255,240,0.85)';
+  const lines = body.split('\n');
+  const wrapped = [];
+  lines.forEach(line => wrapped.push(...wrapText(ctx, line, canvas.width-72)));
+  wrapped.forEach((line, i) => ctx.fillText(line, 36, bodyStartY + i*30));
+
+  panel.texture.needsUpdate = true;
+}
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.arcTo(x+w, y, x+w, y+h, r);
+  ctx.arcTo(x+w, y+h, x, y+h, r);
+  ctx.arcTo(x, y+h, x, y, r);
+  ctx.arcTo(x, y, x+w, y, r);
+  ctx.closePath();
+}
+function wrapText(ctx, text, maxWidth) {
+  const words = text.split(' ');
+  const lines = []; let current = '';
+  words.forEach(w => {
+    const test = current ? current + ' ' + w : w;
+    if (ctx.measureText(test).width > maxWidth && current) { lines.push(current); current = w; }
+    else current = test;
+  });
+  if (current) lines.push(current);
+  return lines;
+}
+function showInfoPanel(panel, nearPosition) {
+  panel.mesh.position.set(nearPosition.x + 0.35, nearPosition.y + 0.15, nearPosition.z);
+  panel.mesh.visible = true;
+  fadeValue((v) => panel.material.opacity = v, 0.95, 1.5);
+}
+function hideInfoPanel(panel, duration=1.3) {
+  return new Promise((resolve) => {
+    const from = panel.material.opacity;
+    fadeValueTo((v) => panel.material.opacity = v, from, 0, duration, () => {
+      panel.mesh.visible = false;
+      resolve();
+    });
+  });
+}
+function billboardPanel(panel) {
+  if (panel.mesh.visible) panel.mesh.lookAt(camera.position);
+}
+
+const birdInfoPanel = createInfoPanel('', '');
+
+// ===================== XENO-CANTO : chant + métadonnées réelles =====================
+async function fetchBirdSong(scientificName) {
+  try {
+    // L'API v3 attend une syntaxe par tags : gen:Genre+sp:espece (pas une recherche libre)
+    const [genus, species] = scientificName.trim().split(/\s+/);
+    const query = `gen:${genus}${species ? '+sp:'+species : ''}`;
+    const url = `https://xeno-canto.org/api/3/recordings?query=${query}&key=${XENO_CANTO_KEY}`;
+    const res = await fetch(url);
+    if (!res.ok) { log('Xeno-canto erreur ' + res.status); return null; }
+    const data = await res.json();
+    if (data.recordings && data.recordings.length) {
+      // On privilégie une qualité correcte (grade A ou B) et un chant type "song"
+      const best = data.recordings.find(r => (r.q === 'A' || r.q === 'B') && r.type?.includes('song')) 
+                 || data.recordings[0];
+      best.fileUrl = best.file.startsWith('http') ? best.file : 'https:' + best.file;
+      return best; // enregistrement complet (métadonnées + URL audio)
+    }
+  } catch(e) { log('Xeno-canto indisponible: ' + e.message); }
+  return null;
+}
+
+// Construit le texte du panneau pédagogique à partir des métadonnées réelles
+// de l'enregistrement (aucune donnée inventée) : lieu, date, type de chant, enregistreur.
+function buildBirdDescription(rec) {
+  const type = rec.type ? rec.type.toLowerCase() : 'chant';
+  const place = [rec.loc, rec.cnt].filter(Boolean).join(', ');
+  const lines = [];
+  lines.push(`${type.charAt(0).toUpperCase()+type.slice(1)}${place ? ' enregistré à ' + place : ''}.`);
+  if (rec.date) lines.push(`Date : ${rec.date}${rec.time && rec.time !== '?' ? ' à ' + rec.time : ''}`);
+  if (rec.rec) lines.push(`Enregistré par ${rec.rec} — via Xeno-canto`);
+  return lines.join('\n');
+}
+
+// ===================== ABEILLE (procédurale, en attendant un .glb) =====================
+function createBee() {
+  const bee = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.SphereGeometry(0.03, 8, 8),
+    new THREE.MeshStandardMaterial({ color:0xffcc33 })
+  );
+  bee.add(body);
+  const wingGeo = new THREE.PlaneGeometry(0.04, 0.02);
+  const wingMat = new THREE.MeshStandardMaterial({ color:0xffffff, transparent:true, opacity:0.6, side:THREE.DoubleSide });
+  const wingL = new THREE.Mesh(wingGeo, wingMat); wingL.position.set(-0.025, 0.01, 0);
+  const wingR = new THREE.Mesh(wingGeo, wingMat); wingR.position.set(0.025, 0.01, 0);
+  bee.add(wingL, wingR);
+  bee.userData = { wingL, wingR };
+  return bee;
+}
+const bee = createBee();
+scene.add(bee);
+
+// ===================== OISEAU 3D (placeholder animé — remplaçable par .glb) =====================
+function createBirdPlaceholder() {
+  const bird = new THREE.Group();
+  const bodyMat = new THREE.MeshStandardMaterial({ color:0xcc5533 });
+  const body = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.15, 8), bodyMat);
+  body.rotation.z = Math.PI/2;
+  bird.add(body);
+
+  const wingGeo = new THREE.PlaneGeometry(0.12, 0.05);
+  const wingMat = new THREE.MeshStandardMaterial({ color:0x995533, side:THREE.DoubleSide });
+  const wingL = new THREE.Mesh(wingGeo, wingMat); wingL.position.set(0, 0, 0.03);
+  const wingR = new THREE.Mesh(wingGeo, wingMat); wingR.position.set(0, 0, -0.03);
+  bird.add(wingL, wingR);
+  bird.userData = { wingL, wingR };
+  return bird;
+}
+const bird = createBirdPlaceholder();
+bird.position.set(-1.2, 1.8, -1.5);
+bird.visible = false; // révélé (matérialisé) quand son chant démarre
+scene.add(bird);
+
+// Ombres de contact au sol (ancrage visuel)
+const beeShadow = createContactShadow(0.12);
+const birdShadow = createContactShadow(0.22);
+
+// ===================== CYCLE DES OISEAUX (plusieurs espèces, arrivées successives) =====================
+// Toutes les BIRD_CYCLE_INTERVAL secondes : l'oiseau actuel se dissout (fondu de
+// sortie + arrêt du chant), puis le suivant arrive (chant réel Xeno-canto qui
+// démarre en fondu, matérialisation, fiche pédagogique qui apparaît).
+let birdCycleIndex = 0;
+let birdCycleRunning = false;
+
+function sleep(seconds) {
+  return new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+}
+
+async function showNextBird() {
+  const species = BIRD_SPECIES_LIST[birdCycleIndex % BIRD_SPECIES_LIST.length];
+  birdCycleIndex++;
+
+  const rec = await fetchBirdSong(species.scientific);
+  if (!rec) {
+    log(`Chant indisponible pour ${species.common} (hors-ligne ou Xeno-canto injoignable)`);
+    return; // on retentera au prochain cycle avec l'espèce suivante
+  }
+
+  birdSongSound = playPositionalSound(rec.fileUrl, bird.position, 0.5, true, 1.5); // fondu d'entrée du chant
+  log('Chant réel chargé : ' + species.common + ' (Xeno-canto)');
+
+  const title = rec.en || species.common;
+  const scientific = [rec.gen, rec.sp].filter(Boolean).join(' ') || species.scientific;
+  drawInfoPanel(birdInfoPanel, title, buildBirdDescription(rec), scientific);
+
+  materialize(bird, 2.2, () => {
+    showInfoPanel(birdInfoPanel, bird.position);
+  });
+}
+
+async function hideBird() {
+  const tasks = [];
+  if (bird.visible) tasks.push(new Promise((resolve) => dematerialize(bird, 1.3, resolve)));
+  if (birdInfoPanel.mesh.visible) tasks.push(hideInfoPanel(birdInfoPanel, 1.1));
+  if (birdSongSound) tasks.push(fadeOutSound(birdSongSound, 1.3));
+  await Promise.all(tasks);
+}
+
+async function birdCycleLoop() {
+  if (birdCycleRunning) return;
+  birdCycleRunning = true;
+  while (birdCycleRunning) {
+    await showNextBird();
+    await sleep(BIRD_CYCLE_INTERVAL);
+    await hideBird();
+    await sleep(1); // courte pause, décor sans oiseau, avant le suivant
+  }
+}
+
+// ===================== LIBELLULES / PAPILLONS (apparitions successives) =====================
+function createButterfly() {
+  const group = new THREE.Group();
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x2b2b2b });
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.006, 0.03, 4, 6), bodyMat);
+  body.rotation.x = Math.PI/2;
+  group.add(body);
+
+  const hue = Math.random();
+  const wingColor = new THREE.Color().setHSL(hue, 0.7, 0.6);
+  const wingMat = new THREE.MeshStandardMaterial({
+    color: wingColor, side: THREE.DoubleSide, transparent: true, opacity: 0,
+    emissive: wingColor, emissiveIntensity: 0.15
+  });
+  const wingShape = new THREE.Shape();
+  wingShape.moveTo(0,0);
+  wingShape.quadraticCurveTo(0.05, 0.04, 0.045, 0.01);
+  wingShape.quadraticCurveTo(0.04, -0.02, 0, 0);
+  const wingGeo = new THREE.ShapeGeometry(wingShape);
+
+  const wingL = new THREE.Mesh(wingGeo, wingMat); wingL.position.set(0, 0, 0);
+  const wingR = new THREE.Mesh(wingGeo, wingMat); wingR.position.set(0, 0, 0);
+  wingR.scale.x = -1;
+  group.add(wingL, wingR);
+  group.userData = { wingL, wingR, wingMat, kind:'butterfly' };
+  return group;
+}
+
+function createDragonfly() {
+  const group = new THREE.Group();
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x2f6b5e, metalness:0.3, roughness:0.4, transparent:true, opacity:0 });
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.004, 0.06, 4, 6), bodyMat);
+  body.rotation.x = Math.PI/2;
+  group.add(body);
+
+  const wingMat = new THREE.MeshStandardMaterial({
+    color: 0xcfe8e0, transparent:true, opacity:0, side:THREE.DoubleSide
+  });
+  const wingGeo = new THREE.PlaneGeometry(0.045, 0.012);
+  const offsets = [
+    [0.015, 0, 0.01, 1], [0.015, 0, -0.01, -1],   // paire avant
+    [-0.01, 0, 0.01, 1], [-0.01, 0, -0.01, -1]    // paire arrière
+  ];
+  const wings = offsets.map(([x,y,z,side]) => {
+    const w = new THREE.Mesh(wingGeo, wingMat);
+    w.position.set(x, y, z);
+    w.scale.z = side;
+    group.add(w);
+    return w;
+  });
+  group.userData = { wings, bodyMat, wingMat, kind:'dragonfly' };
+  return group;
+}
+
+// Machine à états : fait apparaître une créature à la fois, la fait voler
+// sur un chemin doux, puis la fait disparaître avant la suivante — effet "voyage".
+const encounterPool = [createButterfly(), createButterfly(), createDragonfly()];
+encounterPool.forEach(c => { c.visible = false; scene.add(c); });
+
+const encounterState = {
+  active: null,
+  phase: 'idle',       // idle -> fadeIn -> flying -> fadeOut -> idle
+  phaseStart: 0,
+  nextAt: 4,           // première apparition après 4s
+  poolIndex: 0,
+  flightSeed: Math.random() * 100,
+};
+
+const FADE_DURATION = 1.8;
+const FLIGHT_DURATION = 16;
+const PAUSE_BETWEEN = 6;
+
+function updateEncounters(t) {
+  const st = encounterState;
+
+  if (st.phase === 'idle' && t >= st.nextAt) {
+    st.active = encounterPool[st.poolIndex % encounterPool.length];
+    st.poolIndex++;
+    st.active.visible = true;
+    st.phase = 'fadeIn';
+    st.phaseStart = t;
+    st.flightSeed = Math.random() * 100;
+  }
+
+  if (!st.active) return;
+  const creature = st.active;
+  const elapsed = t - st.phaseStart;
+  const seed = st.flightSeed;
+
+  // Trajectoire douce, différente pour chaque type
+  const isDragon = creature.userData.kind === 'dragonfly';
+  const r = isDragon ? 1.1 : 0.7;
+  const speed = isDragon ? 0.5 : 0.35;
+  const localT = t + seed;
+  const pos = new THREE.Vector3(
+    Math.cos(localT * speed) * r + Math.sin(localT * 1.3) * (isDragon ? 0.15 : 0.25),
+    (isDragon ? 1.1 : 1.3) + Math.sin(localT * (isDragon ? 0.9 : 1.9)) * 0.25,
+    Math.sin(localT * speed) * r + Math.cos(localT * 1.1) * (isDragon ? 0.15 : 0.25) - 1
+  );
+  creature.position.copy(pos);
+  const lookTarget = pos.clone().add(new THREE.Vector3(
+    -Math.sin(localT * speed), 0, Math.cos(localT * speed)
+  ));
+  creature.lookAt(lookTarget);
+
+  // Battement d'ailes
+  if (isDragon) {
+    const flap = Math.sin(t * 55) * 0.5;
+    creature.userData.wings.forEach((w, i) => { w.rotation.z = (i % 2 === 0 ? flap : -flap); });
+  } else {
+    const flap = (Math.sin(t * 14) * 0.5 + 0.5) * 1.1; // papillon: battement ample et lent
+    creature.userData.wingL.rotation.y = flap;
+    creature.userData.wingR.rotation.y = -flap;
+  }
+
+  // Gestion des phases (fondu entrée/sortie + durée de vol)
+  const mats = isDragon
+    ? [creature.userData.bodyMat, creature.userData.wingMat]
+    : [creature.userData.wingMat];
+
+  if (st.phase === 'fadeIn') {
+    const p = Math.min(1, elapsed / FADE_DURATION);
+    mats.forEach(m => m.opacity = p * (isDragon ? 0.9 : 0.85));
+    if (p >= 1) { st.phase = 'flying'; st.phaseStart = t; }
+  } else if (st.phase === 'flying') {
+    if (elapsed >= FLIGHT_DURATION) { st.phase = 'fadeOut'; st.phaseStart = t; }
+  } else if (st.phase === 'fadeOut') {
+    const p = Math.min(1, elapsed / FADE_DURATION);
+    mats.forEach(m => m.opacity = (1 - p) * (isDragon ? 0.9 : 0.85));
+    if (p >= 1) {
+      creature.visible = false;
+      st.active = null;
+      st.phase = 'idle';
+      st.nextAt = t + PAUSE_BETWEEN;
+    }
+  }
+}
+
+// ============================================================================
+// BIBLIOTHÈQUE DE MODÈLES — architecture générique pour .glb / .ksplat
+// ============================================================================
+// Objectif : ajouter un futur modèle ne doit demander qu'une entrée dans
+// ASSET_LIBRARY plus bas, sans toucher au reste du code (chargement,
+// animation, dissolution, ombre de contact — tout est déjà branché).
+
+// ----- Gaussian Splats (.ksplat) : un seul DropInViewer partagé pour toutes les scènes splat -----
+const splatViewer = new GaussianSplats3D.DropInViewer({
+  selfDrivenMode: false,
+  camera: camera,
+  renderer: renderer,
+  useBuiltInControls: false,
+  sharedMemoryForWorkers: false // évite les soucis de cross-origin isolation en PWA
+});
+scene.add(splatViewer);
+
+// ----- Modèles animés (.glb) : un mixer par modèle chargé, mis à jour chaque frame -----
+const gltfLoader = new GLTFLoader();
+const animatedModels = []; // { mixer, model }
+function updateAnimatedModels(dt) {
+  animatedModels.forEach(({ mixer }) => mixer.update(dt));
+}
+
+// Petites finitions pour que les modèles glb rendent mieux en VR : ombres,
+// intensité d'environnement (cohérence avec la skybox EXR utilisée comme lumière
+// ambiante via scene.environment), et un léger contour lumineux (rim light) façon
+// "sujet qui se détache" sur les silhouettes fines (ailes, pattes, antennes).
+function beautifyModel(model) {
+  model.traverse((node) => {
+    if (!node.isMesh) return;
+    node.castShadow = true;
+    node.receiveShadow = true;
+    if (node.material) {
+      const mats = Array.isArray(node.material) ? node.material : [node.material];
+      mats.forEach((mat) => {
+        if ('envMapIntensity' in mat) mat.envMapIntensity = 1.15;
+        // Rim light subtil : un léger halo émissif sur les bords, très bon marché
+        if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
+          mat.emissive = mat.emissive || new THREE.Color(0x000000);
+          mat.emissiveIntensity = Math.max(mat.emissiveIntensity || 0, 0.05);
+        }
+      });
+    }
+  });
+}
+
+// Quaternion utilitaire pour une rotation de 180° sur X — corrige les exports
+// RealityCapture souvent Z-up / tête en bas une fois importés dans un repère Y-up.
+const FLIP_180_X = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0), Math.PI);
+
+// ----- Chargeur générique .glb -----
+// opts: { position:[x,y,z], scale:number, flip180:bool, clipName?:string (sinon 1er clip trouvé),
+//         materializeOnLoad:bool (défaut true), materializeDuration:number }
+function loadGlbCreature(opts) {
+  return new Promise((resolve, reject) => {
+    gltfLoader.load(opts.path, (gltf) => {
+      const model = gltf.scene;
+      model.position.set(...(opts.position || [0, 1.5, -1.5]));
+      if (opts.scale) model.scale.setScalar(opts.scale);
+      if (opts.flip180) model.quaternion.copy(FLIP_180_X);
+      beautifyModel(model);
+
+      let mixer = null;
+      if (gltf.animations && gltf.animations.length) {
+        mixer = new THREE.AnimationMixer(model);
+        const clip = opts.clipName
+          ? gltf.animations.find(c => c.name === opts.clipName)
+          : gltf.animations[0];
+        if (clip) mixer.clipAction(clip).play();
+        animatedModels.push({ mixer, model });
+      }
+
+      if (opts.materializeOnLoad !== false) {
+        model.visible = false; // materialize() a besoin de partir d'un état caché
+        scene.add(model);
+        materialize(model, opts.materializeDuration || 2.2);
+      } else {
+        scene.add(model);
+      }
+      resolve({ model, mixer, gltf });
+    }, undefined, (err) => { log('Erreur glb (' + opts.path + '): ' + err.message); reject(err); });
+  });
+}
+
+// ----- Chargeur générique .ksplat (via le DropInViewer partagé) -----
+// opts: { position:[x,y,z], scale:number, flip180:bool, materializeOnLoad:bool,
+//         materializeDuration:number, revealSweep:bool (effet de balayage vertical, cf. plus bas) }
+function loadKsplatCreature(opts) {
+  const quat = opts.flip180 ? FLIP_180_X : new THREE.Quaternion();
+  return splatViewer.addSplatScene(opts.path, {
+    position: opts.position || [0, 1.5, -1.5],
+    rotation: [quat.x, quat.y, quat.z, quat.w],
+    scale: opts.scale ? [opts.scale, opts.scale, opts.scale] : [1, 1, 1],
+    showLoadingUI: false
+  }).then(() => {
+    log('Splat chargé : ' + opts.path);
+    if (opts.materializeOnLoad !== false) {
+      if (opts.revealSweep) sweepRevealSplat(opts.materializeDuration || 2.8);
+      else materialize(splatViewer, opts.materializeDuration || 2.5);
+    }
+    return splatViewer;
+  }).catch((e) => { log('Erreur splat (' + opts.path + '): ' + e.message); throw e; });
+}
+
+// ----- Dissolution avancée pour splats : balayage vertical via clipping plane -----
+// Alternative au simple scale-in : le splat apparaît progressivement du bas vers
+// le haut (façon "sortie de terre"), plus organique pour une plante qu'un pop-in.
+// Best-effort : dépend du matériau interne de GaussianSplats3D qui honore (ou non)
+// les clipping planes standard Three.js — à valider visuellement une fois testé,
+// avec repli automatique sur le scale-in classique en cas d'erreur.
+function sweepRevealSplat(duration = 2.8, heightRange = [-0.5, 2.5]) {
+  try {
+    renderer.localClippingEnabled = true;
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -heightRange[0]);
+    const materials = [];
+    splatViewer.traverse((o) => { if (o.material) materials.push(o.material); });
+    if (!materials.length) { materialize(splatViewer, duration); return; }
+    materials.forEach((m) => { m.clippingPlanes = [plane]; });
+    splatViewer.visible = true;
+    spawnSparkleBurst(splatViewer.position.clone());
+    const start = performance.now();
+    function step() {
+      const p = Math.min(1, (performance.now() - start) / (duration * 1000));
+      plane.constant = -(heightRange[0] + (heightRange[1] - heightRange[0]) * p);
+      if (p < 1) requestAnimationFrame(step);
+      else materials.forEach((m) => { m.clippingPlanes = []; });
+    }
+    step();
+  } catch (e) {
+    log('Balayage indisponible, repli sur dissolution classique');
+    materialize(splatViewer, duration);
+  }
+}
+
+// ============================================================================
+// BIBLIOTHÈQUE D'ASSETS — ajoute une entrée ici pour chaque futur modèle prêt.
+// Rien d'autre à modifier : chargement, animation, dissolution et ombre de
+// contact sont déjà branchés génériquement.
+// ============================================================================
+const ASSET_LIBRARY = [
+  { id: 'fraxinelle', type: 'ksplat', path: './assets/models/fraxinelle.ksplat',
+    position: [1.2, 1.5, -1.8], scale: 2.2, flip180: true },
+
+  // Exemples prêts à activer dès que les fichiers existent (décommente + adapte) :
+  // { id: 'abeille-glb', type: 'glb', path: './assets/models/abeille.glb',
+  //   position: [0, 1.4, -1], scale: 0.06, clipName: 'Fly' },
+  // { id: 'oiseau-glb', type: 'glb', path: './assets/models/oiseau.glb',
+  //   position: [-1.2, 1.8, -1.5], scale: 0.08, clipName: 'FlapWings' },
+  // { id: 'libellule-ksplat', type: 'ksplat', path: './assets/models/libellule.ksplat',
+  //   position: [-1, 1.2, -1.5], scale: 0.3, revealSweep: true },
+];
+
+ASSET_LIBRARY.forEach((entry) => {
+  if (entry.type === 'glb') loadGlbCreature(entry);
+  else if (entry.type === 'ksplat') loadKsplatCreature(entry);
+});
+
+// ===================== MODE JOUR / NUIT =====================
+const dayNightState = { isNight: false, transitioning: false };
+let owlSound = null, cicadaSound = null, birdSongSound = null, streamSound = null, ambSound = null;
+
+function toggleDayNight() {
+  if (dayNightState.transitioning) return;
+  dayNightState.transitioning = true;
+  dayNightState.isNight = !dayNightState.isNight;
+  const goingNight = dayNightState.isNight;
+  log(goingNight ? 'Passage en mode nuit...' : 'Retour au mode jour...');
+
+  if (goingNight) {
+    if (nightTexture) {
+      applyNightVisuals(nightTexture);
+    } else {
+      texLoader.load(NIGHT_SKY_URL, (tex) => {
+        tex.mapping = THREE.EquirectangularReflectionMapping;
+        tex.colorSpace = THREE.SRGBColorSpace;
+        nightTexture = tex;
+        applyNightVisuals(tex);
+      }, undefined, (e) => { log('Erreur ciel nocturne: ' + e.message); dayNightState.transitioning = false; });
+    }
+  } else {
+    if (dayTexture) {
+      scene.background = dayTexture;
+      scene.environment = dayTexture;
+    }
+    sun.intensity = 0.8;
+    scene.children.forEach(c => { if (c.isHemisphereLight) c.intensity = 0.6; });
+    dayNightState.transitioning = false;
+  }
+
+  // Bascule audio : jour (oiseau Xeno-canto + ruisseau) <-> nuit (chouette + cigales)
+  [birdSongSound, streamSound].forEach(s => { if (s && s.isPlaying) s.stop(); });
+  [owlSound, cicadaSound].forEach(s => { if (s && s.isPlaying) s.stop(); });
+
+  if (goingNight) {
+    owlSound = playPositionalSound(OWL_SOUND_URL, bird.position, 0.5, true);
+    cicadaSound = playPositionalSound(CICADA_SOUND_URL, new THREE.Vector3(-2.5, 0.5, -1), 0.4, true);
+  } else {
+    if (birdSongSound) birdSongSound.play();
+    if (streamSound) streamSound.play();
+  }
+}
+
+function applyNightVisuals(tex) {
+  scene.background = tex;
+  scene.environment = tex;
+  sun.intensity = 0.08;               // quasi éteint : seule la lune éclaire un peu
+  scene.children.forEach(c => { if (c.isHemisphereLight) c.intensity = 0.15; });
+  dayNightState.transitioning = false;
+  log('Mode nuit activé');
+}
+
+// Déclenchement : touche N (test desktop) ou gâchette/squeeze d'un contrôleur Quest
+window.addEventListener('keydown', (e) => { if (e.key === 'n' || e.key === 'N') toggleDayNight(); });
+
+// ===================== VR ENTRY =====================
+const vrButtonEl = VRButton.createButton(renderer);
+const arButtonEl = ARButton.createButton(renderer, { requiredFeatures: [], optionalFeatures: ['local-floor'] });
+document.body.appendChild(vrButtonEl);
+document.body.appendChild(arButtonEl);
+// Repositionne les deux boutons natifs côte à côte (par défaut ils se superposent)
+vrButtonEl.style.left = 'calc(50% - 130px)';
+arButtonEl.style.left = 'calc(50% + 10px)';
+document.getElementById('enterBtn').addEventListener('click', () => {
+  document.querySelector('#overlay').style.display = 'none';
+  startAmbience();
+  birdCycleLoop();
+  vrButtonEl.click();
+}, { once:true });
+
+document.getElementById('enterArBtn').addEventListener('click', () => {
+  document.querySelector('#overlay').style.display = 'none';
+  startAmbience();
+  birdCycleLoop();
+  arButtonEl.click();
+}, { once:true });
+
+// Bascule jour/nuit via la gâchette d'un contrôleur Quest (select)
+renderer.xr.addEventListener('sessionstart', () => {
+  const session = renderer.xr.getSession();
+  session.addEventListener('selectstart', () => toggleDayNight());
+});
+
+// ===================== ANIMATION =====================
+const clock = new THREE.Clock();
+let t = 0;
+
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(clock.getDelta(), 0.1);
+  t += dt;
+
+  // Abeille : vol en orbite irrégulière autour du spectateur
+  const beeR = 0.9;
+  bee.position.set(
+    Math.cos(t*0.6) * beeR + Math.sin(t*2.3)*0.08,
+    1.4 + Math.sin(t*1.7)*0.15,
+    Math.sin(t*0.6) * beeR + Math.cos(t*3.1)*0.08 - 0.5
+  );
+  bee.lookAt(rig.position.x, bee.position.y, rig.position.z);
+  const wingFlap = Math.sin(t*40) * 0.9;
+  bee.userData.wingL.rotation.y = wingFlap;
+  bee.userData.wingR.rotation.y = -wingFlap;
+
+  // Oiseau : battement d'ailes plus lent, léger balancement
+  const birdFlap = Math.sin(t*6) * 0.6;
+  bird.userData.wingL.rotation.z = birdFlap;
+  bird.userData.wingR.rotation.z = -birdFlap;
+  bird.position.y = 1.8 + Math.sin(t*0.8) * 0.03;
+
+  // Ombres de contact : suivent abeille/oiseau au sol
+  updateContactShadow(beeShadow, bee);
+  updateContactShadow(birdShadow, bird);
+
+  // Brume : dérive lente
+  mistGroup.children.forEach(m => {
+    m.position.x += Math.cos(m.userData.driftAngle) * m.userData.driftSpeed * dt;
+    m.position.z += Math.sin(m.userData.driftAngle) * m.userData.driftSpeed * dt;
+    // Billboard sur l'axe Y uniquement (reste vertical, pivote juste pour faire face)
+    const dx = camera.getWorldPosition(new THREE.Vector3()).x - m.position.x;
+    const dz = camera.getWorldPosition(new THREE.Vector3()).z - m.position.z;
+    m.rotation.y = Math.atan2(dx, dz);
+  });
+
+  // Pollen : montée lente + oscillation, recyclage en boucle verticale
+  const posAttr = pollenGeo.attributes.position;
+  for (let i = 0; i < POLLEN_COUNT; i++) {
+    const seed = pollenSeed[i];
+    posAttr.array[i*3]   += Math.sin(t*0.3 + seed) * 0.0006;
+    posAttr.array[i*3+1] += 0.0009;
+    posAttr.array[i*3+2] += Math.cos(t*0.25 + seed) * 0.0006;
+    if (posAttr.array[i*3+1] > 2.6) posAttr.array[i*3+1] = 0;
+  }
+  posAttr.needsUpdate = true;
+
+  // Libellules / papillons : machine à états d'apparitions successives
+  updateEncounters(t);
+
+  // Rayons de lumière volumétriques (scintillement doux)
+  updateGodRays(t);
+
+  // Respiration douce de l'espace (appliquée au rig, pas à la caméra, pour rester
+  // compatible avec le tracking VR — dérive très subtile, jamais perceptible comme un mouvement)
+  rig.position.y = Math.sin(t * 0.25) * 0.006;
+  rig.position.x = Math.sin(t * 0.13) * 0.004;
+  rig.position.z = Math.cos(t * 0.17) * 0.004;
+
+  // Fondus audio/opacité en cours (ambiance, ruisseau, panneaux...)
+  updateFades();
+
+  // Matérialisation (dissolution d'apparition) des splats/créatures + étincelles
+  updateMaterializations();
+  updateDematerializations();
+  updateSparkleBursts(dt);
+  billboardPanel(birdInfoPanel);
+
+  // Animations des futurs modèles .glb (AnimationMixer)
+  updateAnimatedModels(dt);
+
+  // Le DropInViewer doit être mis à jour manuellement puisque selfDrivenMode:false
+  if (splatViewer.update) splatViewer.update();
+
+  renderer.render(scene, camera);
+});
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ===================== SERVICE WORKER (mode hors-ligne) =====================
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').then(() => log('Mode hors-ligne activé'));
+  });
+}
+</script>
+</body>
+</html>

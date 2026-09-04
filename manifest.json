@@ -1,0 +1,10 @@
+{
+  "name": "Clairière — Relaxation VR",
+  "short_name": "Clairière",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#04140b",
+  "theme_color": "#0a1f14",
+  "orientation": "any",
+  "icons": []
+}
