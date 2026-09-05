@@ -112,7 +112,7 @@ sun.position.set(5, 8, 3);
 scene.add(sun);
 
 // Brouillard doux : profondeur, cohérence avec le décor forêt
-scene.fog = new THREE.FogExp2(0x9fc2a8, 0.045);
+// Brouillard de scène retiré (rendait un voile vert perçu comme une brume gênante).
 
 // ===================== SKYBOX (environnements EXR 100% locaux) =====================
 const exrLoader = new EXRLoader();
@@ -452,7 +452,18 @@ function loadImageCORS(url) {
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => resolve(img);
-    img.onerror = () => resolve(null);
+    img.onerror = () => {
+      // Repli : certains serveurs (ex. Xeno-canto) ne renvoient pas d'en-têtes
+      // CORS, ce qui bloque l'usage de l'image comme texture WebGL même si elle
+      // s'affiche très bien dans un <img> classique. On repasse par un proxy
+      // d'image public gratuit (images.weserv.nl) qui ajoute ces en-têtes.
+      const proxied = new Image();
+      proxied.crossOrigin = 'anonymous';
+      proxied.onload = () => resolve(proxied);
+      proxied.onerror = () => resolve(null);
+      const cleanUrl = url.replace(/^https?:\/\//, '');
+      proxied.src = 'https://images.weserv.nl/?url=' + encodeURIComponent(cleanUrl);
+    };
     img.src = url;
   });
 }
@@ -726,141 +737,30 @@ async function birdCycleLoop() {
 }
 
 // ===================== LIBELLULES / PAPILLONS (apparitions successives) =====================
-function createButterfly() {
-  const group = new THREE.Group();
-  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x2b2b2b });
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.006, 0.03, 4, 6), bodyMat);
-  body.rotation.x = Math.PI/2;
-  group.add(body);
-
-  const hue = Math.random();
-  const wingColor = new THREE.Color().setHSL(hue, 0.7, 0.6);
-  const wingMat = new THREE.MeshStandardMaterial({
-    color: wingColor, side: THREE.DoubleSide, transparent: true, opacity: 0,
-    emissive: wingColor, emissiveIntensity: 0.15
-  });
-  const wingShape = new THREE.Shape();
-  wingShape.moveTo(0,0);
-  wingShape.quadraticCurveTo(0.05, 0.04, 0.045, 0.01);
-  wingShape.quadraticCurveTo(0.04, -0.02, 0, 0);
-  const wingGeo = new THREE.ShapeGeometry(wingShape);
-
-  const wingL = new THREE.Mesh(wingGeo, wingMat); wingL.position.set(0, 0, 0);
-  const wingR = new THREE.Mesh(wingGeo, wingMat); wingR.position.set(0, 0, 0);
-  wingR.scale.x = -1;
-  group.add(wingL, wingR);
-  group.userData = { wingL, wingR, wingMat, kind:'butterfly' };
-  return group;
+// ===================== TRAJECTOIRE DE VOL (réutilisée du système procédural d'origine) =====================
+// Même trajectoire orbitale douce que les papillons/libellules générés au tout
+// début du projet, appliquée maintenant aux vrais modèles .glb. Chaque créature
+// volante a son propre "flightSeed" (déphasage aléatoire) pour ne pas voler en
+// parfaite synchronisation avec les autres.
+const flyingCreatures = []; // { obj, kind:'butterfly'|'dragonfly', flightSeed, baseZ }
+function registerFlyingCreature(obj, kind, baseZ = -1) {
+  flyingCreatures.push({ obj, kind, flightSeed: Math.random() * 100, baseZ });
 }
-
-function createDragonfly() {
-  const group = new THREE.Group();
-  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x2f6b5e, metalness:0.3, roughness:0.4, transparent:true, opacity:0 });
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.004, 0.06, 4, 6), bodyMat);
-  body.rotation.x = Math.PI/2;
-  group.add(body);
-
-  const wingMat = new THREE.MeshStandardMaterial({
-    color: 0xcfe8e0, transparent:true, opacity:0, side:THREE.DoubleSide
+function updateFlyingCreatures(t) {
+  flyingCreatures.forEach(({ obj, kind, flightSeed, baseZ }) => {
+    const isDragon = kind === 'dragonfly';
+    const r = isDragon ? 1.1 : 0.7;
+    const speed = isDragon ? 0.5 : 0.35;
+    const localT = t + flightSeed;
+    const pos = new THREE.Vector3(
+      Math.cos(localT * speed) * r + Math.sin(localT * 1.3) * (isDragon ? 0.15 : 0.25),
+      (isDragon ? 1.1 : 1.3) + Math.sin(localT * (isDragon ? 0.9 : 1.9)) * 0.25,
+      Math.sin(localT * speed) * r + Math.cos(localT * 1.1) * (isDragon ? 0.15 : 0.25) + baseZ
+    );
+    obj.position.copy(pos);
+    const lookTarget = pos.clone().add(new THREE.Vector3(-Math.sin(localT * speed), 0, Math.cos(localT * speed)));
+    obj.lookAt(lookTarget);
   });
-  const wingGeo = new THREE.PlaneGeometry(0.045, 0.012);
-  const offsets = [
-    [0.015, 0, 0.01, 1], [0.015, 0, -0.01, -1],   // paire avant
-    [-0.01, 0, 0.01, 1], [-0.01, 0, -0.01, -1]    // paire arrière
-  ];
-  const wings = offsets.map(([x,y,z,side]) => {
-    const w = new THREE.Mesh(wingGeo, wingMat);
-    w.position.set(x, y, z);
-    w.scale.z = side;
-    group.add(w);
-    return w;
-  });
-  group.userData = { wings, bodyMat, wingMat, kind:'dragonfly' };
-  return group;
-}
-
-// Machine à états : fait apparaître une créature à la fois, la fait voler
-// sur un chemin doux, puis la fait disparaître avant la suivante — effet "voyage".
-const encounterPool = [createButterfly(), createButterfly(), createDragonfly()];
-encounterPool.forEach(c => { c.visible = false; scene.add(c); });
-
-const encounterState = {
-  active: null,
-  phase: 'idle',       // idle -> fadeIn -> flying -> fadeOut -> idle
-  phaseStart: 0,
-  nextAt: 4,           // première apparition après 4s
-  poolIndex: 0,
-  flightSeed: Math.random() * 100,
-};
-
-const FADE_DURATION = 1.8;
-const FLIGHT_DURATION = 16;
-const PAUSE_BETWEEN = 6;
-
-function updateEncounters(t) {
-  const st = encounterState;
-
-  if (st.phase === 'idle' && t >= st.nextAt) {
-    st.active = encounterPool[st.poolIndex % encounterPool.length];
-    st.poolIndex++;
-    st.active.visible = true;
-    st.phase = 'fadeIn';
-    st.phaseStart = t;
-    st.flightSeed = Math.random() * 100;
-  }
-
-  if (!st.active) return;
-  const creature = st.active;
-  const elapsed = t - st.phaseStart;
-  const seed = st.flightSeed;
-
-  // Trajectoire douce, différente pour chaque type
-  const isDragon = creature.userData.kind === 'dragonfly';
-  const r = isDragon ? 1.1 : 0.7;
-  const speed = isDragon ? 0.5 : 0.35;
-  const localT = t + seed;
-  const pos = new THREE.Vector3(
-    Math.cos(localT * speed) * r + Math.sin(localT * 1.3) * (isDragon ? 0.15 : 0.25),
-    (isDragon ? 1.1 : 1.3) + Math.sin(localT * (isDragon ? 0.9 : 1.9)) * 0.25,
-    Math.sin(localT * speed) * r + Math.cos(localT * 1.1) * (isDragon ? 0.15 : 0.25) - 1
-  );
-  creature.position.copy(pos);
-  const lookTarget = pos.clone().add(new THREE.Vector3(
-    -Math.sin(localT * speed), 0, Math.cos(localT * speed)
-  ));
-  creature.lookAt(lookTarget);
-
-  // Battement d'ailes
-  if (isDragon) {
-    const flap = Math.sin(t * 55) * 0.5;
-    creature.userData.wings.forEach((w, i) => { w.rotation.z = (i % 2 === 0 ? flap : -flap); });
-  } else {
-    const flap = (Math.sin(t * 14) * 0.5 + 0.5) * 1.1; // papillon: battement ample et lent
-    creature.userData.wingL.rotation.y = flap;
-    creature.userData.wingR.rotation.y = -flap;
-  }
-
-  // Gestion des phases (fondu entrée/sortie + durée de vol)
-  const mats = isDragon
-    ? [creature.userData.bodyMat, creature.userData.wingMat]
-    : [creature.userData.wingMat];
-
-  if (st.phase === 'fadeIn') {
-    const p = Math.min(1, elapsed / FADE_DURATION);
-    mats.forEach(m => m.opacity = p * (isDragon ? 0.9 : 0.85));
-    if (p >= 1) { st.phase = 'flying'; st.phaseStart = t; }
-  } else if (st.phase === 'flying') {
-    if (elapsed >= FLIGHT_DURATION) { st.phase = 'fadeOut'; st.phaseStart = t; }
-  } else if (st.phase === 'fadeOut') {
-    const p = Math.min(1, elapsed / FADE_DURATION);
-    mats.forEach(m => m.opacity = (1 - p) * (isDragon ? 0.9 : 0.85));
-    if (p >= 1) {
-      creature.visible = false;
-      st.active = null;
-      st.phase = 'idle';
-      st.nextAt = t + PAUSE_BETWEEN;
-    }
-  }
 }
 
 // ============================================================================
@@ -929,7 +829,23 @@ function attachWingFlutter(model, opts = {}) {
   const maxAngle = THREE.MathUtils.degToRad(opts.maxAngleDeg ?? 20);
   const speed = opts.flapSpeed ?? 8;
 
+  // Bounding box en ESPACE LOCAL du modèle (pas monde) : le shader travaille sur
+  // les sommets bruts (`transformed`, avant position/rotation/scale de l'objet),
+  // donc mesurer en position/rotation/échelle monde décalait entièrement la
+  // charnière et faisait tourner tout le modèle en bloc plutôt que plier les ailes.
+  const savedPos = model.position.clone();
+  const savedQuat = model.quaternion.clone();
+  const savedScale = model.scale.clone();
+  model.position.set(0, 0, 0);
+  model.quaternion.identity();
+  model.scale.set(1, 1, 1);
+  model.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(model);
+  model.position.copy(savedPos);
+  model.quaternion.copy(savedQuat);
+  model.scale.copy(savedScale);
+  model.updateMatrixWorld(true);
+
   const center = hingeAxis === 'z' ? (box.min.z + box.max.z) / 2 : (box.min.x + box.max.x) / 2;
   const halfSpan = (hingeAxis === 'z' ? (box.max.z - box.min.z) : (box.max.x - box.min.x)) / 2 || 1;
 
@@ -1006,6 +922,13 @@ function loadGlbCreature(opts) {
       } else {
         scene.add(model);
       }
+
+      // Trajectoire de vol orbitale (reprend le mouvement des créatures procédurales
+      // d'origine) — si demandé, remplace la position statique par un vol continu.
+      if (opts.flightPath) {
+        registerFlyingCreature(model, opts.flightPath.kind, opts.flightPath.baseZ ?? -1);
+      }
+
       resolve({ model, mixer, gltf });
     }, undefined, (err) => { log('Erreur glb (' + opts.path + '): ' + err.message); reject(err); });
   });
@@ -1072,12 +995,14 @@ const ASSET_LIBRARY = [
 
   // Modèles scannés (bounding box ~5cm = déjà à l'échelle réelle, scale:1 conservé)
   { id: 'papillon-glb', type: 'glb', path: './assets/models/papillon.glb',
-    position: [-1.2, 1.5, -1.5], scale: 1,
-    wingFlutter: { maxAngleDeg: 24, flapSpeed: 6 } }, // battement ample et lent
+    position: [-1.2, 1.5, -1.5], scale: 2,
+    wingFlutter: { maxAngleDeg: 24, flapSpeed: 6 }, // battement ample et lent
+    flightPath: { kind: 'butterfly', baseZ: -1 } },
 
   { id: 'libellule-glb', type: 'glb', path: './assets/models/libellule.glb',
-    position: [0.6, 1.35, -1.4], scale: 1,
-    wingFlutter: { maxAngleDeg: 10, flapSpeed: 16 } }, // battement rapide et discret
+    position: [0.6, 1.35, -1.4], scale: 2,
+    wingFlutter: { maxAngleDeg: 10, flapSpeed: 16 }, // battement rapide et discret
+    flightPath: { kind: 'dragonfly', baseZ: -1 } },
 
   // Exemples prêts à activer dès que les fichiers existent (décommente + adapte) :
   // { id: 'oiseau-glb', type: 'glb', path: './assets/models/oiseau.glb',
@@ -1186,7 +1111,7 @@ renderer.setAnimationLoop(() => {
   posAttr.needsUpdate = true;
 
   // Libellules / papillons : machine à états d'apparitions successives
-  updateEncounters(t);
+  updateFlyingCreatures(t);
 
   // Rayons de lumière volumétriques (scintillement doux)
   updateGodRays(t);
