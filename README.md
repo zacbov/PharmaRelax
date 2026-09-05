@@ -73,19 +73,17 @@ le nouveau cache se télécharge.
 - **Rayons de lumière volumétriques** : 5 rayons fins en rendu additif, orientés selon
   la direction du soleil, avec léger scintillement et balancement organique. Technique
   légère (pas de post-processing/EffectComposer) adaptée au GPU mobile du Quest 2.
-  Automatiquement atténués en mode nuit (`updateGodRays()` dans `index.html`).
 - **Respiration de l'espace** : très léger mouvement sinusoïdal (quelques millimètres)
   appliqué au `rig` — jamais à la caméra directement, pour rester compatible avec le
   tracking VR — qui casse la sensation de rigidité totale sans jamais provoquer de gêne.
 
 ## Nouveau : réalisme visuel
-- **Brume au sol** : 6 nappes semi-transparentes qui dérivent lentement, texture générée
-  par canvas (aucun fichier externe requis).
 - **Pollen / poussière de lumière** : 140 particules qui montent doucement en oscillant,
   rendu additif pour un effet lumineux dans les rayons de soleil.
 - **Ombres de contact** : sous l'abeille et l'oiseau, s'assombrissent/rétrécissent selon
   la hauteur de vol — ancre visuellement les créatures dans l'espace.
 - **Brouillard `FogExp2`** réactivé pour la profondeur.
+- ~~Brume au sol~~ — supprimée depuis (voir section dédiée plus bas).
 
 ## Nouveau : séquence pédagogique (chant → apparition → fiche Xeno-canto)
 Quand le chant Xeno-canto démarre, l'oiseau se **matérialise** (effet de dissolution :
@@ -138,6 +136,67 @@ La fraxinelle actuelle est déjà migrée dans ce système (`ASSET_LIBRARY[0]`),
 n'a changé visuellement pour elle — c'est la même chose, juste réorganisée pour accueillir
 la suite facilement.
 
+## Nouveau : papillon et libellule (.glb), battement d'ailes procédural
+Deux modèles scannés ajoutés (`papillon.glb`, `libellule.glb`, compressés Draco —
+**`DRACOLoader` est maintenant requis et configuré**, sans lui le chargement échoue
+silencieusement). Ces modèles n'ont ni squelette ni animation embarquée (specimens
+scannés à plat, ailes figées ouvertes), donc le vol est simulé par un **shader de
+battement procédural** (`attachWingFlutter` dans `index.html`) : les sommets sont
+pliés autour d'une charnière verticale au centre du corps, avec une amplitude qui
+augmente avec l'éloignement au centre (l'extrémité des ailes bouge plus que le corps).
+**Expérimental** : suppose que l'axe X du modèle correspond à l'envergure des ailes
+(vrai pour un specimen scanné à plat). Si le résultat ne va pas dans le bon sens une
+fois testé en VR, essaie `wingFlutter: { hingeAxis:'z', ... }` dans `ASSET_LIBRARY`,
+ou ajuste `maxAngleDeg`/`flapSpeed` — je n'ai pas pu prévisualiser le rendu réel.
+Réglages actuels : papillon = ample et lent (24°, vitesse 6), libellule = rapide et
+discret (10°, vitesse 16).
+
+## Nouveau : rotation continue de la fraxinelle
+Rotation lente ajoutée (`splatViewer.rotation.y`). **Attention** : le `DropInViewer`
+est partagé par tous les `.ksplat` de `ASSET_LIBRARY` — tant qu'il n'y en a qu'un
+seul (la fraxinelle), cette rotation ne concerne qu'elle. Si un second splat est
+ajouté plus tard, il tournera aussi avec elle ; il faudra alors soit l'accepter,
+soit passer à un `DropInViewer` séparé par splat pour un contrôle indépendant.
+
+## Nouveau : photo de l'espèce + sonogramme dans la fiche pédagogique
+- **Sonogramme** : image réelle fournie directement par Xeno-canto (`rec.sono.med`) —
+  aucune API supplémentaire nécessaire, juste normalisation de l'URL.
+- **Photo de l'espèce** : **nouvelle source externe** — l'API REST publique de
+  Wikipedia (`fetchSpeciesPhotoUrl` dans `index.html`), gratuite et sans clé,
+  puisque Xeno-canto est une archive audio seule (pas de photos). Recherche par nom
+  anglais puis repli sur le nom scientifique si la première page n'existe pas.
+- La fiche s'affiche d'abord sans photo/sonogramme (texte seul, pour ne pas faire
+  attendre l'utilisateur), puis se redessine enrichie dès que les deux images
+  arrivent en parallèle.
+- Panneau agrandi (720×460, plan 0.9×0.575m) pour accueillir la mise en page :
+  titre/nom scientifique en haut-gauche, photo en médaillon haut-droit, texte
+  au milieu, sonogramme en bande basse.
+
+## Nouveau : environnements 100% locaux (fini les appels réseau pour les décors)
+Le mode jour/nuit (qui allait chercher un ciel étoilé sur Poly Haven) est remplacé
+par un **cycle de 5 environnements**, tous locaux (`ENV_LIBRARY` dans `index.html`) :
+forêt moussue (défaut), forêt d'automne, cascade, allée, sentier tropical. Dépose
+les 5 fichiers `.exr` dans `assets/env/` :
+- `mossy_forest_4k.exr` (déjà présent)
+- `autumn_forest_01_4k.exr`
+- `lauter_waterfall_8k.exr`
+- `preller_drive_4k.exr`
+- `rainforest_trail_4k.exr`
+
+Déclenchement inchangé : touche `N` (test desktop) ou gâchette contrôleur en VR —
+passe au décor suivant dans la liste. **Note sur le cache offline** : seul le décor
+par défaut (`mossy_forest_4k.exr`) est pré-mis en cache à l'installation ; les 4
+autres (environ 250 Mo au total à eux cinq) se mettent en cache automatiquement dès
+que tu les charges une première fois via le cycle — évite un premier téléchargement
+énorme d'un coup. Les sons de chouette/cigales du mode nuit ont été retirés (plus de
+vraie "nuit" dans les décors fournis) ; à réintroduire facilement plus tard si tu
+ajoutes un EXR nocturne dédié.
+
+## Suppression : la brume
+Retirée entièrement à ta demande (rendu jugé pas convaincant). Le code (texture,
+génération des nappes, mise à jour dans la boucle de rendu) a été supprimé, pas
+juste désactivé.
+
 ## Nouveau : plusieurs oiseaux d'Europe en cycle
 6 espèces européennes défilent automatiquement, une toutes les 20s (`BIRD_CYCLE_INTERVAL`
 dans `index.html`) : rougegorge, merle noir, mésange charbonnière, pinson des arbres,
@@ -153,19 +212,15 @@ que de bloquer.
 Pour ajuster la liste ou le rythme : `BIRD_SPECIES_LIST` (ajouter/retirer des espèces,
 n'importe quel nom scientifique reconnu par Xeno-canto) et `BIRD_CYCLE_INTERVAL`.
 
-## Correctifs rendu : brume, pollen, rayons de lumière
-Trois bugs identifiés après ton test :
-1. **Espace colorimétrique manquant** sur toutes les textures générées par canvas
-   (brume, pollen, rayons, étincelles, ombres) — sans `texture.colorSpace = THREE.SRGBColorSpace`,
-   le renderer les affichait ternes/désaturées. Corrigé partout (`makeRadialTexture`, `makeRayTexture`).
-2. **Brume repensée en billboards verticaux** : des plans posés à plat au sol se voient
-   "de tranche" à hauteur d'œil en vision stéréo VR, ce qui révèle immédiatement leur
-   absence de volume. Remplacés par des plans verticaux qui pivotent pour toujours faire
-   face au spectateur (axe Y) — beaucoup plus crédible en VR.
-3. **Rayons de lumière adoucis** : dégradé désormais aussi en largeur (pas seulement en
-   longueur) pour éviter l'effet "rectangle plat", et billboard partiel vers la caméra
-   (mélange 60% direction du soleil / 40% face caméra) pour limiter l'effet "vu de tranche".
-   Moins nombreux (4 au lieu de 5) mais plus subtils (opacité réduite).
+## Correctifs rendu (historique) : pollen, rayons de lumière
+Bug identifié après un premier test : **espace colorimétrique manquant** sur les
+textures générées par canvas (pollen, rayons, étincelles, ombres) —
+sans `texture.colorSpace = THREE.SRGBColorSpace`, le renderer les affichait
+ternes/désaturées. Corrigé partout (`makeRadialTexture`, `makeRayTexture`).
+Les rayons de lumière ont aussi été adoucis : dégradé désormais en largeur ET en
+longueur (pas seulement en longueur) pour éviter l'effet "rectangle plat", et
+billboard partiel vers la caméra (mélange 60% direction du soleil / 40% face
+caméra) pour limiter l'effet "vu de tranche" en VR stéréo.
 
 ## Nouveau : mode AR téléphone (pour debug sans casque)
 Un second bouton "📱 Essayer en AR (téléphone)" a été ajouté à côté du bouton VR

@@ -2,27 +2,34 @@
 // fonctionnement 100% hors-ligne après la première visite.
 // Attention : incrémente CACHE_NAME à chaque mise à jour de l'app pour
 // forcer le rechargement du cache (sinon le Quest gardera l'ancienne version).
-const CACHE_NAME = 'clairiere-v3';
+const CACHE_NAME = 'clairiere-v4';
 
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
   './manifest.json',
+  // Environnement par défaut (les 4 autres se mettent en cache automatiquement
+  // dès que l'utilisateur les charge via la touche N / la gâchette contrôleur —
+  // voir la règle de cache dynamique same-origin plus bas. Ça évite de précharger
+  // ~250 Mo d'un coup à la première visite).
   './assets/env/mossy_forest_4k.exr',
   './assets/models/fraxinelle.ksplat',
+  './assets/models/papillon.glb',
+  './assets/models/libellule.glb',
   './assets/audio/foret-ambiance.mp3',
   './assets/audio/foret-ruisseau.mp3',
   // Dépendances Three.js + GaussianSplats3D (mises en cache depuis le CDN)
   'https://unpkg.com/three@0.160.0/build/three.module.js',
   'https://unpkg.com/three@0.160.0/examples/jsm/loaders/EXRLoader.js',
   'https://unpkg.com/three@0.160.0/examples/jsm/loaders/GLTFLoader.js',
+  'https://unpkg.com/three@0.160.0/examples/jsm/loaders/DRACOLoader.js',
   'https://unpkg.com/three@0.160.0/examples/jsm/webxr/VRButton.js',
   'https://unpkg.com/three@0.160.0/examples/jsm/webxr/ARButton.js',
   'https://unpkg.com/@mkkellogg/gaussian-splats-3d@0.4.6/build/gaussian-splats-3d.module.js',
-  // Mode nuit : chargés depuis leurs CDN respectifs, mis en cache dynamiquement
-  // au premier passage en mode nuit (voir la logique de fetch plus bas).
-  // Ajoute ici tes futurs .glb (abeille, oiseau, libellules, papillons) :
-  // './assets/models/abeille.glb',
+  // Décodeur Draco (fichiers binaires WASM/JS chargés à l'exécution par DRACOLoader)
+  'https://unpkg.com/three@0.160.0/examples/jsm/libs/draco/draco_decoder.js',
+  'https://unpkg.com/three@0.160.0/examples/jsm/libs/draco/draco_decoder.wasm',
+  'https://unpkg.com/three@0.160.0/examples/jsm/libs/draco/draco_wasm_wrapper.js',
 ];
 
 self.addEventListener('install', (event) => {
@@ -51,14 +58,15 @@ self.addEventListener('fetch', (event) => {
     caches.match(event.request).then((cached) => {
       if (cached) return cached;
       return fetch(event.request).then((response) => {
-        // Met en cache dynamiquement : same-origin, chants Xeno-canto, et assets
-        // du mode nuit (skybox Poly Haven, sons BigSoundBank) une fois téléchargés.
+        // Met en cache dynamiquement : tout le same-origin (couvre notamment les
+        // 4 autres environnements EXR chargés à la demande via le cycle de décors,
+        // ainsi que les photos/futurs .glb/.ksplat ajoutés localement), et les
+        // chants + sonogrammes Xeno-canto une fois téléchargés avec succès.
         const url = event.request.url;
         const isSameOrigin = url.startsWith(self.location.origin);
-        const isCacheableThirdParty = /xeno-canto\.org.*\.(mp3|wav|ogg)/i.test(url)
-          || url.includes('dl.polyhaven.org')
-          || url.includes('bigsoundbank.com/UPLOAD');
-        if (event.request.method === 'GET' && response.ok && (isSameOrigin || isCacheableThirdParty)) {
+        const isXenoCantoMedia = /xeno-canto\.org.*\.(mp3|wav|ogg|png|jpg|jpeg)/i.test(url);
+        const isWikipediaPhoto = /wikipedia\.org|wikimedia\.org/i.test(url);
+        if (event.request.method === 'GET' && response.ok && (isSameOrigin || isXenoCantoMedia || isWikipediaPhoto)) {
           const clone = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
         }
