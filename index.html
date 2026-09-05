@@ -127,14 +127,11 @@ exrLoader.load(ENV_LIBRARY[0].path, (texture) => {
   if (xhr.total) loadFill.style.width = Math.min(100, (xhr.loaded/xhr.total*100)).toFixed(0) + '%';
 }, (err) => log('Erreur EXR (' + ENV_LIBRARY[0].path + '): ' + err.message));
 
-// ===================== SOL (fallback + nuage de points) =====================
-const ground = new THREE.Mesh(
-  new THREE.CircleGeometry(30, 48),
-  new THREE.MeshStandardMaterial({ color: 0x2e4a30, roughness: 1, transparent:true, opacity:0.4 })
-);
-ground.rotation.x = -Math.PI/2;
-ground.position.y = -0.02;
-scene.add(ground);
+// Disque de sol retiré : un plan large (rayon 30) vu presque "de tranche" à
+// hauteur d'œil en VR/AR traverse tout l'écran comme une bande horizontale
+// (c'était la "bande verte" au milieu de l'image). Le décor 360° (skybox EXR)
+// montre déjà le sol/chemin, ce disque était un reliquat inutile depuis le
+// retrait de lupin.ply.
 
 // lupin.ply retiré : trop lourd (99K points bruts) pour un rendu Quest 2 fluide.
 // On passe sur des Gaussian Splats allégés à la place (voir ASSET_LIBRARY plus bas).
@@ -334,7 +331,7 @@ function startAmbience() {
   ambSound = new THREE.Audio(listener);
   audioLoader.load('./assets/audio/foret-ambiance.mp3', (buffer) => {
     ambSound.setBuffer(buffer); ambSound.setLoop(true); ambSound.play();
-    fadeInSound(ambSound, 0.3, 4);
+    fadeInSound(ambSound, 0.15, 4); // -50% par rapport à avant
   }, undefined, () => log('Ajoute assets/audio/foret-ambiance.mp3 (voir bigsoundbank.com/UPLOAD/mp3/0100.mp3)'));
 
   // Ruisseau positionnel, placé sur un côté pour un effet binaural marqué, fondu à l'entrée
@@ -743,11 +740,14 @@ async function birdCycleLoop() {
 // volante a son propre "flightSeed" (déphasage aléatoire) pour ne pas voler en
 // parfaite synchronisation avec les autres.
 const flyingCreatures = []; // { obj, kind:'butterfly'|'dragonfly', flightSeed, baseZ }
-function registerFlyingCreature(obj, kind, baseZ = -1) {
-  flyingCreatures.push({ obj, kind, flightSeed: Math.random() * 100, baseZ });
+function registerFlyingCreature(obj, kind, baseZ = -1, orientationFixDeg = [0, 0, 0]) {
+  const fixQuat = new THREE.Quaternion().setFromEuler(
+    new THREE.Euler(...orientationFixDeg.map(THREE.MathUtils.degToRad))
+  );
+  flyingCreatures.push({ obj, kind, flightSeed: Math.random() * 100, baseZ, fixQuat });
 }
 function updateFlyingCreatures(t) {
-  flyingCreatures.forEach(({ obj, kind, flightSeed, baseZ }) => {
+  flyingCreatures.forEach(({ obj, kind, flightSeed, baseZ, fixQuat }) => {
     const isDragon = kind === 'dragonfly';
     const r = isDragon ? 1.1 : 0.7;
     const speed = isDragon ? 0.5 : 0.35;
@@ -760,6 +760,11 @@ function updateFlyingCreatures(t) {
     obj.position.copy(pos);
     const lookTarget = pos.clone().add(new THREE.Vector3(-Math.sin(localT * speed), 0, Math.cos(localT * speed)));
     obj.lookAt(lookTarget);
+    // Correction d'orientation : un modèle scanné à plat (specimen épinglé) n'a
+    // généralement pas son axe "avant" aligné avec ce que lookAt() attend
+    // nativement (-Z). Si le vol paraît de travers/à l'envers, ajuste
+    // orientationFixDeg dans ASSET_LIBRARY plutôt que de retoucher ce code.
+    obj.quaternion.multiply(fixQuat);
   });
 }
 
@@ -813,78 +818,64 @@ function beautifyModel(model) {
   });
 }
 
-// ----- Battement d'ailes procédural (shader) -----
+// ----- Battement d'ailes procédural (CPU, fiable) -----
 // Ces modèles scannés (papillon, libellule) n'ont ni squelette ni animation :
 // les ailes sont figées en position ouverte. On simule le vol en pliant les
-// sommets autour d'une charnière verticale au centre du corps (axe X), avec une
-// amplitude qui augmente avec l'éloignement au centre — l'extrémité des ailes
-// bouge donc plus que le corps, comme un vrai battement.
+// sommets autour d'une charnière au centre du corps, avec une amplitude qui
+// augmente avec l'éloignement au centre (l'extrémité des ailes bouge plus que
+// le corps). Calcul fait directement sur les sommets bruts en CPU (pas de
+// shader GPU via onBeforeCompile, dont le comportement dépendait de subtilités
+// de mise en cache des programmes de Three.js, difficiles à garantir sans
+// pouvoir tester visuellement) — plus lent mais 100% prévisible.
 // EXPÉRIMENTAL : suppose que l'axe X du modèle correspond à l'envergure des
 // ailes (généralement vrai pour un specimen scanné à plat, ailes déployées).
-// Si le résultat ne va pas dans le bon sens une fois testé, inverse l'axe via
-// opts.hingeAxis:'z' ou ajuste maxAngleDeg/flapSpeed — tout est ci-dessous.
-const flutterMaterials = []; // { material, uniforms } — mis à jour chaque frame
+// Si le résultat ne va pas dans le bon sens, inverse via opts.hingeAxis:'z'.
+const flutterEntries = []; // { meshes:[{posAttr, base}], center, halfSpan, maxAngle, speed, hingeAxis }
 function attachWingFlutter(model, opts = {}) {
-  const hingeAxis = opts.hingeAxis || 'x'; // axe le long duquel on mesure l'éloignement au centre
+  const hingeAxis = opts.hingeAxis || 'x';
   const maxAngle = THREE.MathUtils.degToRad(opts.maxAngleDeg ?? 20);
   const speed = opts.flapSpeed ?? 8;
+  const coordIdx = hingeAxis === 'z' ? 2 : 0;
 
-  // Bounding box en ESPACE LOCAL du modèle (pas monde) : le shader travaille sur
-  // les sommets bruts (`transformed`, avant position/rotation/scale de l'objet),
-  // donc mesurer en position/rotation/échelle monde décalait entièrement la
-  // charnière et faisait tourner tout le modèle en bloc plutôt que plier les ailes.
-  const savedPos = model.position.clone();
-  const savedQuat = model.quaternion.clone();
-  const savedScale = model.scale.clone();
-  model.position.set(0, 0, 0);
-  model.quaternion.identity();
-  model.scale.set(1, 1, 1);
-  model.updateMatrixWorld(true);
-  const box = new THREE.Box3().setFromObject(model);
-  model.position.copy(savedPos);
-  model.quaternion.copy(savedQuat);
-  model.scale.copy(savedScale);
-  model.updateMatrixWorld(true);
-
-  const center = hingeAxis === 'z' ? (box.min.z + box.max.z) / 2 : (box.min.x + box.max.x) / 2;
-  const halfSpan = (hingeAxis === 'z' ? (box.max.z - box.min.z) : (box.max.x - box.min.x)) / 2 || 1;
-
+  // Centre/halfSpan calculés directement sur les données de sommets BRUTES
+  // (espace local, avant toute transformation) — fiable, ne dépend ni de la
+  // position de vol, ni de l'échelle, ni de la rotation de l'objet dans la scène.
+  let min = Infinity, max = -Infinity;
+  const meshes = [];
   model.traverse((node) => {
-    if (!node.isMesh || !node.material) return;
-    const mats = Array.isArray(node.material) ? node.material : [node.material];
-    mats.forEach((mat) => {
-      mat.onBeforeCompile = (shader) => {
-        shader.uniforms.uTime = { value: 0 };
-        shader.uniforms.uCenter = { value: center };
-        shader.uniforms.uHalfSpan = { value: halfSpan };
-        shader.uniforms.uMaxAngle = { value: maxAngle };
-        shader.uniforms.uSpeed = { value: speed };
-        shader.vertexShader =
-          `uniform float uTime, uCenter, uHalfSpan, uMaxAngle, uSpeed;\n` + shader.vertexShader;
-        const hingeCoord = hingeAxis === 'z' ? 'transformed.z' : 'transformed.x';
-        shader.vertexShader = shader.vertexShader.replace(
-          '#include <begin_vertex>',
-          `#include <begin_vertex>
-          {
-            float d = ${hingeCoord} - uCenter;
-            float norm = clamp(abs(d) / uHalfSpan, 0.0, 1.0);
-            float theta = sin(uTime * uSpeed) * uMaxAngle * norm;
-            float c = cos(theta), s = sin(theta);
-            float dy = transformed.y;
-            ${hingeCoord} = uCenter + d * c - dy * s;
-            transformed.y = d * s + dy * c;
-          }`
-        );
-        mat.userData.flutterShader = shader;
-      };
-      mat.needsUpdate = true;
-      flutterMaterials.push(mat);
-    });
+    if (!node.isMesh || !node.geometry) return;
+    const posAttr = node.geometry.attributes.position;
+    if (!posAttr) return;
+    for (let i = 0; i < posAttr.count; i++) {
+      const v = posAttr.array[i*3 + coordIdx];
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    meshes.push({ posAttr, base: posAttr.array.slice() });
   });
+  if (!meshes.length) return;
+  const center = (min + max) / 2;
+  const halfSpan = (max - min) / 2 || 1;
+
+  flutterEntries.push({ meshes, center, halfSpan, maxAngle, speed, coordIdx });
 }
 function updateWingFlutter(t) {
-  flutterMaterials.forEach((mat) => {
-    if (mat.userData.flutterShader) mat.userData.flutterShader.uniforms.uTime.value = t;
+  flutterEntries.forEach(({ meshes, center, halfSpan, maxAngle, speed, coordIdx }) => {
+    const theta0 = Math.sin(t * speed) * maxAngle;
+    meshes.forEach(({ posAttr, base }) => {
+      const arr = posAttr.array;
+      for (let i = 0; i < posAttr.count; i++) {
+        const o = i * 3;
+        const d = base[o + coordIdx] - center;
+        const norm = Math.min(1, Math.abs(d) / halfSpan);
+        const theta = theta0 * norm;
+        const c = Math.cos(theta), s = Math.sin(theta);
+        const y0 = base[o + 1];
+        arr[o + coordIdx] = center + d * c - y0 * s;
+        arr[o + 1] = d * s + y0 * c;
+      }
+      posAttr.needsUpdate = true;
+    });
   });
 }
 // RealityCapture souvent Z-up / tête en bas une fois importés dans un repère Y-up.
@@ -926,7 +917,7 @@ function loadGlbCreature(opts) {
       // Trajectoire de vol orbitale (reprend le mouvement des créatures procédurales
       // d'origine) — si demandé, remplace la position statique par un vol continu.
       if (opts.flightPath) {
-        registerFlyingCreature(model, opts.flightPath.kind, opts.flightPath.baseZ ?? -1);
+        registerFlyingCreature(model, opts.flightPath.kind, opts.flightPath.baseZ ?? -1, opts.flightPath.orientationFixDeg || [0,0,0]);
       }
 
       resolve({ model, mixer, gltf });

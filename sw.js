@@ -2,7 +2,7 @@
 // fonctionnement 100% hors-ligne après la première visite.
 // Attention : incrémente CACHE_NAME à chaque mise à jour de l'app pour
 // forcer le rechargement du cache (sinon le Quest gardera l'ancienne version).
-const CACHE_NAME = 'clairiere-v5';
+const CACHE_NAME = 'clairiere-v6';
 
 const ASSETS_TO_CACHE = [
   './',
