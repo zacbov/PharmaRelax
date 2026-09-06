@@ -212,6 +212,101 @@ que de bloquer.
 Pour ajuster la liste ou le rythme : `BIRD_SPECIES_LIST` (ajouter/retirer des espèces,
 n'importe quel nom scientifique reconnu par Xeno-canto) et `BIRD_CYCLE_INTERVAL`.
 
+## Nouveau : 35 espèces au total
+29 espèces européennes supplémentaires ajoutées à `BIRD_SPECIES_LIST` (35 au total
+avec les 6 d'origine) : mésange bleue, sittelle, grimpereau, troglodyte, pouillot
+véloce, fauvette à tête noire, grives (musicienne/draine), étourneau, geai, pie,
+corneille, choucas, pics (épeiche/vert), coucou, tourterelle turque, pigeon ramier,
+bruant jaune, verdier, tarin, bouvreuil, roitelet huppé, accenteur, bergeronnette
+grise, hirondelle rustique, huppe fasciée, loriot, faucon crécerelle, buse variable.
+Avec le mode aléatoire (`BIRD_RANDOM_ORDER`), il faudra ~35 cycles de 20s (~12
+minutes) avant qu'une espèce ne revienne. Certaines de ces espèces (rapaces,
+corvidés) ont des chants plus rares ou moins bien couverts sur Xeno-canto — si
+`fetchBirdSong` ne trouve rien pour l'une d'elles, le cycle passe simplement à la
+suivante (comportement déjà en place, rien à faire de plus).
+
+## Nouveau : perf adaptative mobile, throttle battement d'ailes, fondu croisé décors
+1. **Détection mobile** (`IS_MOBILE`/`QUALITY` en haut de `index.html`) : un
+   téléphone en AR a moins de marge GPU qu'un Quest (GPU XR2 Gen 2 dédié). Sur
+   mobile détecté : pollen réduit à 60 particules (au lieu de 140), rayons de
+   lumière réduits à 2 (au lieu de 4). Détection par `navigator.userAgent`, qui
+   exclut explicitement le navigateur Quest (contient aussi "Android" en
+   interne) pour ne pas le confondre avec un vrai téléphone.
+2. **Battement d'ailes throttlé** : le recalcul CPU de tous les sommets ne se
+   fait plus qu'à 30fps (desktop/Quest) ou 20fps (mobile) plutôt qu'à chaque
+   frame (jusqu'à 90fps) — totalement imperceptible visuellement pour un
+   mouvement aussi doux, mais nettement moins coûteux.
+3. **Fondu croisé entre décors** : `cycleEnvironment()` ne bascule plus
+   brutalement — une grande sphère semi-transparente portant le nouveau décor
+   apparaît en fondu (1,8s) autour de la caméra, puis `scene.background` bascule
+   réellement une fois le fondu terminé (l'ancienne texture est libérée à ce
+   moment-là, comme avant). À tester une fois les 4 EXR supplémentaires en place.
+
+## Nouveau : dispose des textures, mode aléatoire, panneau agrandi
+1. **Fuite mémoire corrigée** : `cycleEnvironment()` appelle maintenant
+   `.dispose()` sur l'ancienne texture EXR avant de charger la suivante — sans
+   ça, chaque changement de décor accumulait une texture 4K/8K en mémoire GPU
+   sans jamais la libérer.
+2. **Mode aléatoire pour les oiseaux** (`BIRD_RANDOM_ORDER = true` dans
+   `index.html`) : système de "pioche mélangée" plutôt que du pur hasard —
+   chaque espèce de `BIRD_SPECIES_LIST` sort une fois avant que la liste soit
+   rebattue, avec une vérification pour éviter qu'une espèce revienne juste
+   après elle-même. Repasser à `false` pour l'ordre séquentiel d'origine.
+3. **Panneau pédagogique agrandi** (~+30% : canvas 920×580, plan 1.15×0.725m) et
+   quelques finitions : ombre portée douce pour mieux le détacher du décor,
+   textes plus grands (titre 42px, corps 23px), marges plus généreuses, médaillon
+   photo un peu plus grand. Décalage par rapport à l'oiseau légèrement augmenté
+   pour ne pas chevaucher son modèle.
+
+## Correctifs suite à ton dernier retour
+1. **Bande verte au milieu enfin résolue** : ce n'était ni la brume ni le
+   brouillard (déjà retirés), mais un **grand disque de sol oublié** (rayon 30,
+   semi-transparent, reliquat du fallback sous l'ancien `lupin.ply`). Vu presque
+   "de tranche" à hauteur d'œil en VR/AR, un plan aussi large traverse tout
+   l'écran comme une bande horizontale. Supprimé entièrement — le décor 360°
+   montre déjà le sol.
+2. **Son d'ambiance forêt réduit de 50%** (0.3 → 0.15), ruisseau inchangé (0.5).
+3. **Battement d'ailes réécrit en CPU** (au lieu d'un shader GPU via
+   `onBeforeCompile`) : plus lent mais 100% prévisible — je ne pouvais pas
+   garantir le comportement de la mise en cache des programmes de shader de
+   Three.js sans pouvoir tester visuellement. Toujours **expérimental** sur le
+   sens du pli (suppose l'axe X = envergure des ailes).
+4. **Correction d'orientation de vol ajoutée** (`orientationFixDeg` dans
+   `ASSET_LIBRARY`, ex: `flightPath: { kind:'butterfly', orientationFixDeg:[90,0,0] }`)
+   : un modèle scanné à plat (specimen épinglé) n'a pas forcément son axe "avant"
+   aligné avec ce que `lookAt()` attend nativement — c'est probablement la cause
+   du déplacement "bizarre" persistant. **Je n'ai pas pu deviner la bonne valeur
+   sans voir le rendu** : c'est un réglage à tâtonner toi-même (essaie des
+   multiples de 90° sur chaque axe jusqu'à ce que ça vole dans le bon sens).
+
+## Correctifs suite au test papillon/libellule
+1. **Taille doublée** pour les deux modèles (`scale: 2` dans `ASSET_LIBRARY`).
+2. **Bug réel trouvé dans le battement d'ailes** : le centre de charnière était
+   calculé en coordonnées **monde** (incluant la position de vol) au lieu de
+   coordonnées **locales** du modèle. Résultat concret : le papillon tournait tout
+   entier en bloc de façon rigide plutôt que de plier ses ailes, d'où le
+   "comportement étrange" observé. Corrigé dans `attachWingFlutter()` (mesure de
+   la bounding box avec position/rotation/échelle temporairement réinitialisées).
+3. **Modèles procéduraux d'origine retirés** (`createButterfly`, `createDragonfly`
+   et toute la machine à états d'apparitions successives) — remplacés par les vrais
+   `.glb`. Leur **trajectoire de vol orbitale a été reprise telle quelle**
+   (`updateFlyingCreatures()`, activée via `flightPath: { kind, baseZ }` dans
+   `ASSET_LIBRARY`) et appliquée aux nouveaux modèles.
+4. **Brouillard de scène retiré** (`scene.fog`, distinct de la brume au sol déjà
+   supprimée précédemment) — c'était la source du voile vert persistant.
+5. **Sonogramme** : ajout d'un repli via proxy d'image public gratuit
+   (`images.weserv.nl`) dans `loadImageCORS()`. Cause probable du problème :
+   contrairement à Wikipedia, le serveur d'images Xeno-canto ne renvoie
+   probablement pas d'en-têtes CORS, ce qui bloque son usage comme texture WebGL
+   même si l'image s'affiche normalement dans un navigateur classique.
+
+## Sur les ralentissements en AR téléphone
+Non traité ce tour-ci — quelques pistes si ça persiste sur Quest 3 (dont le GPU dédié
+XR2 Gen 2 est nettement plus puissant qu'un téléphone milieu de gamme, donc ce n'est
+pas forcément représentatif) : réduire `POLLEN_COUNT` (140) et `RAY_COUNT` (4), ou
+détecter le mode AR téléphone pour désactiver certains effets automatiquement.
+À voir selon ce que donne le test sur casque.
+
 ## Correctifs rendu (historique) : pollen, rayons de lumière
 Bug identifié après un premier test : **espace colorimétrique manquant** sur les
 textures générées par canvas (pollen, rayons, étincelles, ombres) —

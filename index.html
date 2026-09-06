@@ -60,6 +60,17 @@ import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
 import * as GaussianSplats3D from '@mkkellogg/gaussian-splats-3d';
 
+// ===================== DÉTECTION APPAREIL (perf adaptative) =====================
+// Un téléphone (utilisé en mode AR pour prévisualiser sans casque) a beaucoup
+// moins de marge GPU qu'un Quest, dont le GPU XR2 Gen 2 est dédié à ce genre de
+// charge. On réduit certains effets coûteux en conséquence.
+const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && !/OculusBrowser|Quest/i.test(navigator.userAgent);
+const QUALITY = {
+  pollenCount: IS_MOBILE ? 60 : 140,
+  rayCount: IS_MOBILE ? 2 : 4,
+  wingFlutterFPS: IS_MOBILE ? 20 : 30, // throttle CPU du battement d'ailes (voir plus bas)
+};
+
 const statusEl = document.getElementById('status');
 const loadFill = document.getElementById('loadFill');
 const log = (m) => { statusEl.textContent = m; console.log(m); };
@@ -74,8 +85,39 @@ const BIRD_SPECIES_LIST = [
   { common: 'Pinson des arbres', scientific: 'Fringilla coelebs' },
   { common: 'Rossignol philomèle', scientific: 'Luscinia megarhynchos' },
   { common: 'Chardonneret élégant', scientific: 'Carduelis carduelis' },
+  { common: 'Mésange bleue', scientific: 'Cyanistes caeruleus' },
+  { common: 'Sittelle torchepot', scientific: 'Sitta europaea' },
+  { common: 'Grimpereau des jardins', scientific: 'Certhia brachydactyla' },
+  { common: 'Troglodyte mignon', scientific: 'Troglodytes troglodytes' },
+  { common: 'Pouillot véloce', scientific: 'Phylloscopus collybita' },
+  { common: 'Fauvette à tête noire', scientific: 'Sylvia atricapilla' },
+  { common: 'Grive musicienne', scientific: 'Turdus philomelos' },
+  { common: 'Grive draine', scientific: 'Turdus viscivorus' },
+  { common: 'Étourneau sansonnet', scientific: 'Sturnus vulgaris' },
+  { common: 'Geai des chênes', scientific: 'Garrulus glandarius' },
+  { common: 'Pie bavarde', scientific: 'Pica pica' },
+  { common: 'Corneille noire', scientific: 'Corvus corone' },
+  { common: 'Choucas des tours', scientific: 'Corvus monedula' },
+  { common: 'Pic épeiche', scientific: 'Dendrocopos major' },
+  { common: 'Pic vert', scientific: 'Picus viridis' },
+  { common: 'Coucou gris', scientific: 'Cuculus canorus' },
+  { common: 'Tourterelle turque', scientific: 'Streptopelia decaocto' },
+  { common: 'Pigeon ramier', scientific: 'Columba palumbus' },
+  { common: 'Bruant jaune', scientific: 'Emberiza citrinella' },
+  { common: 'Verdier d\'Europe', scientific: 'Chloris chloris' },
+  { common: 'Tarin des aulnes', scientific: 'Spinus spinus' },
+  { common: 'Bouvreuil pivoine', scientific: 'Pyrrhula pyrrhula' },
+  { common: 'Roitelet huppé', scientific: 'Regulus regulus' },
+  { common: 'Accenteur mouchet', scientific: 'Prunella modularis' },
+  { common: 'Bergeronnette grise', scientific: 'Motacilla alba' },
+  { common: 'Hirondelle rustique', scientific: 'Hirundo rustica' },
+  { common: 'Huppe fasciée', scientific: 'Upupa epops' },
+  { common: 'Loriot d\'Europe', scientific: 'Oriolus oriolus' },
+  { common: 'Faucon crécerelle', scientific: 'Falco tinnunculus' },
+  { common: 'Buse variable', scientific: 'Buteo buteo' },
 ];
 const BIRD_CYCLE_INTERVAL = 20; // secondes entre chaque nouvel oiseau
+const BIRD_RANDOM_ORDER = true; // false = séquentiel dans l'ordre de BIRD_SPECIES_LIST
 // Bibliothèque d'environnements 100% locaux — plus aucun appel réseau pour les
 // décors. Ajoute/retire des entrées ici selon les fichiers présents dans
 // assets/env/. Le premier de la liste est chargé par défaut au démarrage.
@@ -172,7 +214,7 @@ const rayMat = new THREE.MeshBasicMaterial({
 const sunDir = new THREE.Vector3(5, 8, 3).normalize();
 const godRaysGroup = new THREE.Group();
 const rays = [];
-const RAY_COUNT = 4; // moins nombreux mais plus doux = plus crédible que beaucoup de rayons francs
+const RAY_COUNT = QUALITY.rayCount; // moins nombreux sur mobile (moins de marge GPU)
 for (let i = 0; i < RAY_COUNT; i++) {
   const height = 2.6 + Math.random()*1.2;
   const width = 0.4 + Math.random()*0.35; // plus large, pour un dégradé plus progressif
@@ -226,7 +268,7 @@ function makeRadialTexture(inner, outer) {
 
 // ===================== PARTICULES DE POLLEN / POUSSIÈRE DE LUMIÈRE =====================
 const pollenTexture = makeRadialTexture('rgba(255,250,220,0.9)', 'rgba(255,250,220,0)');
-const POLLEN_COUNT = 140;
+const POLLEN_COUNT = QUALITY.pollenCount;
 const pollenGeo = new THREE.BufferGeometry();
 const pollenPos = new Float32Array(POLLEN_COUNT * 3);
 const pollenSeed = new Float32Array(POLLEN_COUNT);
@@ -430,10 +472,10 @@ function updateSparkleBursts(dt) {
 // ===================== PANNEAU PÉDAGOGIQUE (texte flottant) =====================
 function createInfoPanel(title, body, subtitle='') {
   const canvas = document.createElement('canvas');
-  canvas.width = 720; canvas.height = 460;
+  canvas.width = 920; canvas.height = 580;
   const texture = new THREE.CanvasTexture(canvas);
   const material = new THREE.MeshBasicMaterial({ map: texture, transparent:true, opacity:0, depthWrite:false });
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.575), material);
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.15, 0.725), material);
   mesh.visible = false;
   scene.add(mesh);
   const panel = { mesh, material, canvas, texture };
@@ -469,14 +511,21 @@ function drawInfoPanel(panel, title, body, subtitle='', photoImg=null, sonoImg=n
   const canvas = panel.canvas;
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = 'rgba(10, 28, 18, 0.78)';
-  roundRect(ctx, 8, 8, canvas.width-16, canvas.height-16, 24); ctx.fill();
-  ctx.strokeStyle = 'rgba(150, 220, 180, 0.5)'; ctx.lineWidth = 2;
-  roundRect(ctx, 8, 8, canvas.width-16, canvas.height-16, 24); ctx.stroke();
+
+  // Ombre portée douce derrière le panneau, pour mieux le détacher du décor
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.45)';
+  ctx.shadowBlur = 28;
+  ctx.shadowOffsetY = 8;
+  ctx.fillStyle = 'rgba(10, 28, 18, 0.82)';
+  roundRect(ctx, 10, 10, canvas.width-20, canvas.height-20, 28); ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = 'rgba(150, 220, 180, 0.55)'; ctx.lineWidth = 2.5;
+  roundRect(ctx, 10, 10, canvas.width-20, canvas.height-20, 28); ctx.stroke();
 
   // Photo de l'espèce (haut-droit), en médaillon arrondi
   const hasPhoto = !!photoImg;
-  const photoBox = { x: canvas.width-196, y: 24, w: 168, h: 168, r: 16 };
+  const photoBox = { x: canvas.width-236, y: 32, w: 200, h: 200, r: 20 };
   if (hasPhoto) {
     ctx.save();
     roundRect(ctx, photoBox.x, photoBox.y, photoBox.w, photoBox.h, photoBox.r);
@@ -488,39 +537,39 @@ function drawInfoPanel(panel, title, body, subtitle='', photoImg=null, sonoImg=n
     else { sh = photoImg.width/br; sy = (photoImg.height-sh)/2; }
     ctx.drawImage(photoImg, sx, sy, sw, sh, photoBox.x, photoBox.y, photoBox.w, photoBox.h);
     ctx.restore();
-    ctx.strokeStyle = 'rgba(150,220,180,0.6)'; ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(150,220,180,0.65)'; ctx.lineWidth = 2.5;
     roundRect(ctx, photoBox.x, photoBox.y, photoBox.w, photoBox.h, photoBox.r); ctx.stroke();
   }
 
-  const textMaxWidth = hasPhoto ? photoBox.x - 56 : canvas.width - 72;
+  const textMaxWidth = hasPhoto ? photoBox.x - 64 : canvas.width - 88;
 
   ctx.fillStyle = '#eafff0';
-  ctx.font = '600 34px system-ui, sans-serif';
-  ctx.fillText(title, 36, 58);
+  ctx.font = '600 42px system-ui, sans-serif';
+  ctx.fillText(title, 44, 72);
 
-  let bodyStartY = 108;
+  let bodyStartY = 132;
   if (subtitle) {
-    ctx.font = 'italic 20px system-ui, sans-serif';
+    ctx.font = 'italic 24px system-ui, sans-serif';
     ctx.fillStyle = 'rgba(200,235,210,0.75)';
-    ctx.fillText(subtitle, 36, 86);
-    bodyStartY = 122;
+    ctx.fillText(subtitle, 44, 104);
+    bodyStartY = 148;
   }
 
-  ctx.font = '20px system-ui, sans-serif';
-  ctx.fillStyle = 'rgba(234,255,240,0.85)';
+  ctx.font = '23px system-ui, sans-serif';
+  ctx.fillStyle = 'rgba(234,255,240,0.88)';
   const lines = body.split('\n');
   const wrapped = [];
   lines.forEach(line => wrapped.push(...wrapText(ctx, line, textMaxWidth)));
-  wrapped.forEach((line, i) => ctx.fillText(line, 36, bodyStartY + i*28));
+  wrapped.forEach((line, i) => ctx.fillText(line, 44, bodyStartY + i*33));
 
   // Sonogramme du chant (bande basse) — image réelle fournie par Xeno-canto
-  const sonoBox = { x: 36, y: canvas.height-128, w: canvas.width-72, h: 92 };
+  const sonoBox = { x: 44, y: canvas.height-160, w: canvas.width-88, h: 112 };
   if (sonoImg) {
-    ctx.fillStyle = 'rgba(255,255,255,0.06)';
-    roundRect(ctx, sonoBox.x, sonoBox.y-22, sonoBox.w, sonoBox.h+22, 10); ctx.fill();
-    ctx.font = '13px system-ui, sans-serif';
-    ctx.fillStyle = 'rgba(200,235,210,0.65)';
-    ctx.fillText('Sonogramme du chant (Xeno-canto)', sonoBox.x+8, sonoBox.y-6);
+    ctx.fillStyle = 'rgba(255,255,255,0.07)';
+    roundRect(ctx, sonoBox.x, sonoBox.y-26, sonoBox.w, sonoBox.h+26, 12); ctx.fill();
+    ctx.font = '15px system-ui, sans-serif';
+    ctx.fillStyle = 'rgba(200,235,210,0.68)';
+    ctx.fillText('Sonogramme du chant (Xeno-canto)', sonoBox.x+10, sonoBox.y-8);
     // object-fit: contain, centré dans la bande
     const ir = sonoImg.width / sonoImg.height, br = sonoBox.w / sonoBox.h;
     let dw = sonoBox.w, dh = sonoBox.h;
@@ -552,7 +601,7 @@ function wrapText(ctx, text, maxWidth) {
   return lines;
 }
 function showInfoPanel(panel, nearPosition) {
-  panel.mesh.position.set(nearPosition.x + 0.35, nearPosition.y + 0.15, nearPosition.z);
+  panel.mesh.position.set(nearPosition.x + 0.45, nearPosition.y + 0.18, nearPosition.z);
   panel.mesh.visible = true;
   fadeValue((v) => panel.material.opacity = v, 0.95, 1.5);
 }
@@ -673,14 +722,39 @@ const birdShadow = createContactShadow(0.22);
 // démarre en fondu, matérialisation, fiche pédagogique qui apparaît).
 let birdCycleIndex = 0;
 let birdCycleRunning = false;
+let birdShuffleBag = []; // pioche mélangée pour le mode aléatoire (sans répétition immédiate)
+
+// Renvoie l'espèce suivante : séquentielle (dans l'ordre de la liste) ou
+// aléatoire (pioche mélangée, chaque espèce sort une fois avant de rebattre —
+// évite qu'une même espèce revienne deux fois de suite ou trop souvent).
+function pickNextSpecies() {
+  if (!BIRD_RANDOM_ORDER) {
+    const species = BIRD_SPECIES_LIST[birdCycleIndex % BIRD_SPECIES_LIST.length];
+    birdCycleIndex++;
+    return species;
+  }
+  if (birdShuffleBag.length === 0) {
+    birdShuffleBag = BIRD_SPECIES_LIST.map((_, i) => i);
+    for (let i = birdShuffleBag.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [birdShuffleBag[i], birdShuffleBag[j]] = [birdShuffleBag[j], birdShuffleBag[i]];
+    }
+    // Évite que la dernière espèce du tour précédent se retrouve en tête du nouveau tour
+    if (birdShuffleBag.length > 1 && birdShuffleBag[0] === birdCycleIndex) {
+      [birdShuffleBag[0], birdShuffleBag[1]] = [birdShuffleBag[1], birdShuffleBag[0]];
+    }
+  }
+  const idx = birdShuffleBag.pop();
+  birdCycleIndex = idx; // mémorise la dernière espèce tirée (pour la vérif ci-dessus)
+  return BIRD_SPECIES_LIST[idx];
+}
 
 function sleep(seconds) {
   return new Promise((resolve) => setTimeout(resolve, seconds * 1000));
 }
 
 async function showNextBird() {
-  const species = BIRD_SPECIES_LIST[birdCycleIndex % BIRD_SPECIES_LIST.length];
-  birdCycleIndex++;
+  const species = pickNextSpecies();
 
   const rec = await fetchBirdSong(species.scientific);
   if (!rec) {
@@ -859,7 +933,15 @@ function attachWingFlutter(model, opts = {}) {
 
   flutterEntries.push({ meshes, center, halfSpan, maxAngle, speed, coordIdx });
 }
+// Throttle : recalculer tous les sommets à 90fps est inutile pour un effet aussi
+// doux — on limite à QUALITY.wingFlutterFPS (30 desktop/Quest, 20 mobile),
+// complètement imperceptible visuellement mais nettement moins coûteux en CPU.
+let lastWingFlutterUpdate = 0;
 function updateWingFlutter(t) {
+  const minInterval = 1 / QUALITY.wingFlutterFPS;
+  if (t - lastWingFlutterUpdate < minInterval) return;
+  lastWingFlutterUpdate = t;
+
   flutterEntries.forEach(({ meshes, center, halfSpan, maxAngle, speed, coordIdx }) => {
     const theta0 = Math.sin(t * speed) * maxAngle;
     meshes.forEach(({ posAttr, base }) => {
@@ -1010,6 +1092,12 @@ let birdSongSound = null, streamSound = null, ambSound = null;
 let envCycleIndex = 0;
 let envTransitioning = false;
 
+// Sphère englobante réutilisée pour le fondu croisé entre décors (voir plus bas) :
+// on ne peut pas animer directement l'opacité de scene.background (ce n'est pas
+// un matériau), donc on fait apparaître le nouveau décor sur une grande sphère
+// semi-transparente qui entoure la caméra, puis on bascule scene.background une
+// fois le fondu terminé.
+let crossfadeMesh = null;
 function cycleEnvironment() {
   if (envTransitioning) return;
   envTransitioning = true;
@@ -1019,10 +1107,28 @@ function cycleEnvironment() {
   exrLoader.load(env.path, (tex) => {
     tex.mapping = THREE.EquirectangularReflectionMapping;
     tex.colorSpace = THREE.LinearSRGBColorSpace;
-    scene.background = tex;
-    scene.environment = tex;
-    log('Décor chargé : ' + env.name);
-    envTransitioning = false;
+
+    const CROSSFADE_DURATION = 1.8;
+    const sphere = new THREE.Mesh(
+      new THREE.SphereGeometry(90, 48, 32),
+      new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide, transparent: true, opacity: 0, depthWrite: false, fog: false })
+    );
+    scene.add(sphere);
+    crossfadeMesh = sphere;
+
+    fadeValueTo((v) => { sphere.material.opacity = v; }, 0, 1, CROSSFADE_DURATION, () => {
+      // Fondu terminé : bascule réelle du décor, libère l'ancienne texture et la sphère temporaire
+      const previous = scene.background;
+      scene.background = tex;
+      scene.environment = tex;
+      if (previous && previous.isTexture && previous !== tex) previous.dispose();
+      scene.remove(sphere);
+      sphere.geometry.dispose();
+      sphere.material.dispose();
+      crossfadeMesh = null;
+      log('Décor chargé : ' + env.name);
+      envTransitioning = false;
+    });
   }, undefined, (e) => {
     log('Erreur décor (' + env.path + '), fichier présent ? ' + e.message);
     envTransitioning = false;
