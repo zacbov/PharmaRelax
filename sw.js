@@ -2,7 +2,7 @@
 // fonctionnement 100% hors-ligne après la première visite.
 // Attention : incrémente CACHE_NAME à chaque mise à jour de l'app pour
 // forcer le rechargement du cache (sinon le Quest gardera l'ancienne version).
-const CACHE_NAME = 'clairiere-v11';
+const CACHE_NAME = 'clairiere-v13';
 
 const ASSETS_TO_CACHE = [
   './',
@@ -56,9 +56,24 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Stratégie : cache d'abord (offline-first), avec repli réseau si absent du cache
-// (utile pour les requêtes Xeno-canto, qui elles nécessitent une connexion).
+// Stratégie : cache d'abord (offline-first), avec repli réseau si absent du cache.
 self.addEventListener('fetch', (event) => {
+  const url = event.request.url;
+  const isSameOrigin = url.startsWith(self.location.origin);
+  const isXenoCantoMedia = /xeno-canto\.org.*\.(mp3|wav|ogg|png|jpg|jpeg)/i.test(url);
+  const isWikipediaPhoto = /wikipedia\.org|wikimedia\.org/i.test(url);
+  const isWeservProxy = /images\.weserv\.nl/i.test(url);
+
+  // Ne PAS intercepter les domaines hors liste (ex: unpkg.com, xeno-canto pour
+  // l'API JSON elle-même). Les laisser filer nativement évite tout risque que
+  // le Service Worker casse une requête cross-origin qu'il ne gère pas — bug
+  // réel rencontré avec le sonogramme Xeno-canto (bloqué CORS + catch() sans
+  // retour valide = "Failed to convert value to 'Response'", qui empêchait le
+  // repli côté page via proxy de fonctionner correctement).
+  if (!isSameOrigin && !isXenoCantoMedia && !isWikipediaPhoto && !isWeservProxy) {
+    return; // laisse le navigateur gérer directement, sans passer par respondWith()
+  }
+
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) return cached;
@@ -67,18 +82,18 @@ self.addEventListener('fetch', (event) => {
         // 4 autres environnements EXR chargés à la demande via le cycle de décors,
         // ainsi que les photos/futurs .glb/.ksplat ajoutés localement), et les
         // chants + sonogrammes Xeno-canto une fois téléchargés avec succès.
-        const url = event.request.url;
-        const isSameOrigin = url.startsWith(self.location.origin);
-        const isXenoCantoMedia = /xeno-canto\.org.*\.(mp3|wav|ogg|png|jpg|jpeg)/i.test(url);
-        const isWikipediaPhoto = /wikipedia\.org|wikimedia\.org/i.test(url);
         if (event.request.method === 'GET' && response.ok && (isSameOrigin || isXenoCantoMedia || isWikipediaPhoto)) {
           const clone = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
         }
         return response;
       }).catch(() => {
-        // Hors-ligne et pas en cache (ex: chant Xeno-canto jamais téléchargé) :
-        // on laisse l'app gérer l'absence gracieusement (voir log() dans index.html)
+        // IMPORTANT : respondWith() exige toujours une vraie Response, jamais
+        // undefined — sinon la requête échoue plus fort qu'un simple 404/CORS
+        // normal, et le code de repli côté page (ex: proxy d'image) ne se
+        // déclenche pas correctement. Une réponse d'erreur explicite laisse le
+        // navigateur (et notre <img>.onerror côté page) réagir normalement.
+        return new Response('', { status: 504, statusText: 'Network error (Service Worker)' });
       });
     })
   );

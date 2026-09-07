@@ -762,24 +762,8 @@ function buildBirdDescription(rec) {
   return lines.join('\n');
 }
 
-// ===================== ABEILLE (procédurale, en attendant un .glb) =====================
-function createBee() {
-  const bee = new THREE.Group();
-  const body = new THREE.Mesh(
-    new THREE.SphereGeometry(0.03, 8, 8),
-    new THREE.MeshStandardMaterial({ color:0xffcc33 })
-  );
-  bee.add(body);
-  const wingGeo = new THREE.PlaneGeometry(0.04, 0.02);
-  const wingMat = new THREE.MeshStandardMaterial({ color:0xffffff, transparent:true, opacity:0.6, side:THREE.DoubleSide });
-  const wingL = new THREE.Mesh(wingGeo, wingMat); wingL.position.set(-0.025, 0.01, 0);
-  const wingR = new THREE.Mesh(wingGeo, wingMat); wingR.position.set(0.025, 0.01, 0);
-  bee.add(wingL, wingR);
-  bee.userData = { wingL, wingR };
-  return bee;
-}
-const bee = createBee();
-scene.add(bee);
+// Abeille procédurale retirée (Three.js pur) — les créatures volantes sont
+// désormais les vrais modèles .glb (papillon, libellule) uniquement.
 
 // ===================== OISEAU 3D (placeholder animé — remplaçable par .glb) =====================
 function createBirdPlaceholder() {
@@ -802,8 +786,7 @@ bird.position.set(-1.2, 1.8, -1.5);
 bird.visible = false; // révélé (matérialisé) quand son chant démarre
 scene.add(bird);
 
-// Ombres de contact au sol (ancrage visuel)
-const beeShadow = createContactShadow(0.12);
+// Ombre de contact au sol (ancrage visuel)
 const birdShadow = createContactShadow(0.22);
 
 // ===================== CYCLE DES OISEAUX (plusieurs espèces, arrivées successives) =====================
@@ -1005,22 +988,31 @@ function attachWingFlutter(model, opts = {}) {
   // Centre/halfSpan calculés directement sur les données de sommets BRUTES
   // (espace local, avant toute transformation) — fiable, ne dépend ni de la
   // position de vol, ni de l'échelle, ni de la rotation de l'objet dans la scène.
-  let min = Infinity, max = -Infinity;
+  // On mesure les 3 axes (pas seulement celui choisi) pour pouvoir diagnostiquer
+  // si le mauvais axe a été supposé pour l'envergure des ailes.
+  let min = { x:Infinity, y:Infinity, z:Infinity }, max = { x:-Infinity, y:-Infinity, z:-Infinity };
   const meshes = [];
+  let totalVerts = 0;
   model.traverse((node) => {
     if (!node.isMesh || !node.geometry) return;
     const posAttr = node.geometry.attributes.position;
     if (!posAttr) return;
+    totalVerts += posAttr.count;
     for (let i = 0; i < posAttr.count; i++) {
-      const v = posAttr.array[i*3 + coordIdx];
-      if (v < min) min = v;
-      if (v > max) max = v;
+      const x = posAttr.array[i*3], y = posAttr.array[i*3+1], z = posAttr.array[i*3+2];
+      if (x < min.x) min.x = x; if (x > max.x) max.x = x;
+      if (y < min.y) min.y = y; if (y > max.y) max.y = y;
+      if (z < min.z) min.z = z; if (z > max.z) max.z = z;
     }
     meshes.push({ posAttr, base: posAttr.array.slice() });
   });
-  if (!meshes.length) return;
-  const center = (min + max) / 2;
-  const halfSpan = (max - min) / 2 || 1;
+  if (!meshes.length) { log('⚠ attachWingFlutter: aucun mesh trouvé (' + (opts.debugName||'?') + ')'); return; }
+
+  const rangeX = max.x-min.x, rangeY = max.y-min.y, rangeZ = max.z-min.z;
+  log(`Battement ${opts.debugName||''} — dimensions locales : X=${rangeX.toFixed(3)} Y=${rangeY.toFixed(3)} Z=${rangeZ.toFixed(3)} (${totalVerts} sommets, hinge=${hingeAxis})`);
+
+  const center = hingeAxis === 'z' ? (min.z+max.z)/2 : (min.x+max.x)/2;
+  const halfSpan = (hingeAxis === 'z' ? rangeZ : rangeX) / 2 || 1;
 
   flutterEntries.push({ meshes, center, halfSpan, maxAngle, speed, coordIdx });
 }
@@ -1064,6 +1056,11 @@ function loadGlbCreature(opts) {
       model.position.set(...(opts.position || [0, 1.5, -1.5]));
       if (opts.scale) model.scale.setScalar(opts.scale);
       if (opts.flip180) model.quaternion.copy(FLIP_180_X);
+      if (opts.rotationDeg && !opts.flightPath) {
+        // Objet statique : la correction d'orientation s'applique directement.
+        const e = new THREE.Euler(...opts.rotationDeg.map(THREE.MathUtils.degToRad));
+        model.quaternion.setFromEuler(e);
+      }
       beautifyModel(model);
 
       let mixer = null;
@@ -1090,7 +1087,8 @@ function loadGlbCreature(opts) {
       // Trajectoire de vol orbitale (reprend le mouvement des créatures procédurales
       // d'origine) — si demandé, remplace la position statique par un vol continu.
       if (opts.flightPath) {
-        registerFlyingCreature(model, opts.flightPath.kind, opts.flightPath.baseZ ?? -1, opts.flightPath.orientationFixDeg || [0,0,0]);
+        const fixDeg = opts.rotationDeg || opts.flightPath.orientationFixDeg || [0,0,0];
+        registerFlyingCreature(model, opts.flightPath.kind, opts.flightPath.baseZ ?? -1, fixDeg);
       }
 
       resolve({ model, mixer, gltf });
@@ -1160,12 +1158,14 @@ const ASSET_LIBRARY = [
   // Modèles scannés (bounding box ~5cm = déjà à l'échelle réelle, scale:1 conservé)
   { id: 'papillon-glb', type: 'glb', path: './assets/models/papillon.glb',
     position: [-1.2, 1.5, -1.5], scale: 2,
-    wingFlutter: { maxAngleDeg: 24, flapSpeed: 6 }, // battement ample et lent
+    rotationDeg: [0, 0, 0], // correction d'orientation statique — à tâtonner (touches 7/8/9, voir README)
+    wingFlutter: { maxAngleDeg: 24, flapSpeed: 6, debugName: 'papillon' }, // battement ample et lent
     flightPath: { kind: 'butterfly', baseZ: -1 } },
 
   { id: 'libellule-glb', type: 'glb', path: './assets/models/libellule.glb',
     position: [0.6, 1.35, -1.4], scale: 2,
-    wingFlutter: { maxAngleDeg: 10, flapSpeed: 16 }, // battement rapide et discret
+    rotationDeg: [0, 0, 0],
+    wingFlutter: { maxAngleDeg: 10, flapSpeed: 16, debugName: 'libellule' }, // battement rapide et discret
     flightPath: { kind: 'dragonfly', baseZ: -1 } },
 
   // Exemples prêts à activer dès que les fichiers existent (décommente + adapte) :
@@ -1173,8 +1173,19 @@ const ASSET_LIBRARY = [
   //   position: [-1.2, 1.8, -1.5], scale: 0.08, clipName: 'FlapWings' },
 ];
 
+// Références capturées pour le réglage interactif d'orientation (voir plus bas,
+// touches 7/8/9) — utile le temps de trouver la bonne correction, à retirer une
+// fois les bonnes valeurs de rotationDeg fixées dans ASSET_LIBRARY.
+const debugFlyingRefs = {};
 ASSET_LIBRARY.forEach((entry) => {
-  if (entry.type === 'glb') loadGlbCreature(entry);
+  if (entry.type === 'glb') {
+    loadGlbCreature(entry).then(({ model }) => {
+      if (entry.flightPath) {
+        const ref = flyingCreatures.find(f => f.obj === model);
+        if (ref) debugFlyingRefs[entry.id] = ref;
+      }
+    });
+  }
   else if (entry.type === 'ksplat') loadKsplatCreature(entry);
 });
 
@@ -1228,6 +1239,33 @@ function cycleEnvironment() {
 
 // Déclenchement : touche N (test desktop) ou gâchette d'un contrôleur Quest
 window.addEventListener('keydown', (e) => { if (e.key === 'n' || e.key === 'N') cycleEnvironment(); });
+
+// ===================== RÉGLAGE INTERACTIF D'ORIENTATION (temporaire, pour debug) =====================
+// Touches 7/8/9 : fait tourner le papillon de 90° sur X/Y/Z à chaque appui, et
+// affiche la valeur courante dans les logs. Une fois la bonne orientation
+// trouvée, reporte les degrés affichés dans rotationDeg (ASSET_LIBRARY) et
+// retire ce bloc. Mêmes touches en majuscule (Shift+7/8/9) pour la libellule.
+const PRESET_AXES = ['x', 'y', 'z'];
+function nudgeOrientation(id, axisIndex) {
+  const ref = debugFlyingRefs[id];
+  if (!ref) { log('Modèle "' + id + '" pas encore chargé'); return; }
+  const deg = [0, 0, 0];
+  const current = ref.fixQuat.clone();
+  const currentEuler = new THREE.Euler().setFromQuaternion(current);
+  deg[0] = THREE.MathUtils.radToDeg(currentEuler.x);
+  deg[1] = THREE.MathUtils.radToDeg(currentEuler.y);
+  deg[2] = THREE.MathUtils.radToDeg(currentEuler.z);
+  deg[axisIndex] = ((deg[axisIndex] + 90 + 180) % 360) - 180; // +90°, ramené entre -180/180
+  ref.fixQuat.setFromEuler(new THREE.Euler(...deg.map(THREE.MathUtils.degToRad)));
+  log(`${id} rotationDeg: [${deg.map(d => Math.round(d)).join(', ')}]`);
+}
+window.addEventListener('keydown', (e) => {
+  if (e.key === '7') nudgeOrientation('papillon-glb', 0);
+  if (e.key === '8') nudgeOrientation('papillon-glb', 1);
+  if (e.key === '9') nudgeOrientation('papillon-glb', 2);
+  if (e.key === '&' /* Shift+7 sur clavier FR */) nudgeOrientation('libellule-glb', 0);
+  if (e.key === 'é' /* Shift+8 sur clavier FR (variable selon layout) */) nudgeOrientation('libellule-glb', 1);
+});
 
 // ===================== MENU DE SÉLECTION DU DÉCOR =====================
 // Étape avant l'entrée en VR/AR : grille de vignettes cliquables. Fonctionne
@@ -1311,26 +1349,13 @@ renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1);
   t += dt;
 
-  // Abeille : vol en orbite irrégulière autour du spectateur
-  const beeR = 0.9;
-  bee.position.set(
-    Math.cos(t*0.6) * beeR + Math.sin(t*2.3)*0.08,
-    1.4 + Math.sin(t*1.7)*0.15,
-    Math.sin(t*0.6) * beeR + Math.cos(t*3.1)*0.08 - 0.5
-  );
-  bee.lookAt(rig.position.x, bee.position.y, rig.position.z);
-  const wingFlap = Math.sin(t*40) * 0.9;
-  bee.userData.wingL.rotation.y = wingFlap;
-  bee.userData.wingR.rotation.y = -wingFlap;
-
   // Oiseau : battement d'ailes plus lent, léger balancement
   const birdFlap = Math.sin(t*6) * 0.6;
   bird.userData.wingL.rotation.z = birdFlap;
   bird.userData.wingR.rotation.z = -birdFlap;
   bird.position.y = 1.8 + Math.sin(t*0.8) * 0.03;
 
-  // Ombres de contact : suivent abeille/oiseau au sol
-  updateContactShadow(beeShadow, bee);
+  // Ombre de contact : suit l'oiseau au sol
   updateContactShadow(birdShadow, bird);
 
   // Pollen : montée lente + oscillation, recyclage en boucle verticale
