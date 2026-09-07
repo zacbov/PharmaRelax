@@ -31,15 +31,43 @@
 <body>
 
 <div id="overlay">
-  <h1>🌿 Clairière</h1>
-  <p>Un espace de calme en réalité virtuelle. Mets ton casque, appuie sur le bouton, et laisse-toi porter par la forêt.</p>
-  <button id="enterBtn">Entrer en VR</button>
-  <button id="enterArBtn" style="margin-top:12px; padding:10px 28px; font-size:14px; border-radius:30px; border:1px solid rgba(111,211,154,0.4); background:transparent; color:#c8ecd8; cursor:pointer;">📱 Essayer en AR (téléphone)</button>
-  <div id="loadBar"><div id="loadFill"></div></div>
-  <p style="font-size:12px;opacity:0.5;margin-top:20px;">Aucun déplacement requis — reste simplement assis ou debout et regarde autour de toi.</p>
-  <p style="font-size:11px;opacity:0.4;margin-top:6px;">L'AR téléphone nécessite Chrome sur Android (ARCore). Utile pour prévisualiser sans casque.</p>
+  <div id="envMenu">
+    <h1>🌿 Clairière</h1>
+    <p>Choisis le décor de ta séance de relaxation.</p>
+    <div id="envGrid"></div>
+  </div>
+
+  <div id="enterStep" style="display:none;">
+    <h1>🌿 Clairière</h1>
+    <p>Un espace de calme en réalité virtuelle. Mets ton casque, appuie sur le bouton, et laisse-toi porter par la forêt.</p>
+    <button id="enterBtn">Entrer en VR</button>
+    <button id="enterArBtn" style="margin-top:12px; padding:10px 28px; font-size:14px; border-radius:30px; border:1px solid rgba(111,211,154,0.4); background:transparent; color:#c8ecd8; cursor:pointer;">📱 Essayer en AR (téléphone)</button>
+    <div id="loadBar"><div id="loadFill"></div></div>
+    <p style="font-size:12px;opacity:0.5;margin-top:20px;">Aucun déplacement requis — reste simplement assis ou debout et regarde autour de toi.</p>
+    <p style="font-size:11px;opacity:0.4;margin-top:6px;">L'AR téléphone nécessite Chrome sur Android (ARCore). Utile pour prévisualiser sans casque.</p>
+    <button id="backToMenuBtn" style="margin-top:16px; background:none; border:none; color:rgba(200,235,210,0.5); font-size:12px; text-decoration:underline; cursor:pointer;">← Changer de décor</button>
+  </div>
 </div>
 <div id="status"></div>
+
+<style>
+  #envGrid {
+    display:grid; grid-template-columns: repeat(3, 1fr); gap:14px;
+    max-width:520px; margin-top:24px;
+  }
+  .envCard {
+    position:relative; aspect-ratio: 4/3; border-radius:14px; overflow:hidden;
+    cursor:pointer; border:2px solid rgba(111,211,154,0.25);
+    background-size:cover; background-position:center;
+    display:flex; align-items:flex-end; transition: transform 0.15s, border-color 0.15s;
+  }
+  .envCard:hover, .envCard:focus { transform:scale(1.04); border-color:#6fd39a; }
+  .envCard span {
+    display:block; width:100%; padding:8px 10px; font-size:12px; color:#fff;
+    background:linear-gradient(transparent, rgba(0,0,0,0.75)); text-align:left;
+  }
+  @media (max-width: 480px) { #envGrid { grid-template-columns: repeat(2, 1fr); max-width:320px; } }
+</style>
 
 <script type="importmap">
 {
@@ -122,11 +150,16 @@ const BIRD_RANDOM_ORDER = true; // false = séquentiel dans l'ordre de BIRD_SPEC
 // décors. Ajoute/retire des entrées ici selon les fichiers présents dans
 // assets/env/. Le premier de la liste est chargé par défaut au démarrage.
 const ENV_LIBRARY = [
-  { name: 'Forêt moussue',      path: './assets/env/mossy_forest_4k.exr' },
-  { name: 'Forêt d\'automne',   path: './assets/env/autumn_forest_01_4k.exr' },
-  { name: 'Cascade (Lauter)',   path: './assets/env/lauter_waterfall_8k.exr' },
-  { name: 'Allée (Preller)',    path: './assets/env/preller_drive_4k.exr' },
-  { name: 'Sentier tropical',   path: './assets/env/rainforest_trail_4k.exr' },
+  { name: 'Forêt moussue',      path: './assets/env/mossy_forest_4k.exr',
+    thumb: './assets/env/thumbs/mossy_forest.webp',      fallbackColor: '#2e4a30' },
+  { name: 'Forêt d\'automne',   path: './assets/env/autumn_forest_01_4k.exr',
+    thumb: './assets/env/thumbs/autumn_forest.webp',     fallbackColor: '#8a5a2f' },
+  { name: 'Cascade (Lauter)',   path: './assets/env/lauter_waterfall_8k.exr',
+    thumb: './assets/env/thumbs/lauter_waterfall.webp',  fallbackColor: '#3a6a72' },
+  { name: 'Allée (Preller)',    path: './assets/env/preller_drive_4k.exr',
+    thumb: './assets/env/thumbs/preller_drive.webp',     fallbackColor: '#5a6a4a' },
+  { name: 'Sentier tropical',   path: './assets/env/rainforest_trail_4k.exr',
+    thumb: './assets/env/thumbs/rainforest_trail.webp',  fallbackColor: '#1f5a3a' },
 ];
 
 // ===================== SCENE =====================
@@ -159,15 +192,8 @@ scene.add(sun);
 // ===================== SKYBOX (environnements EXR 100% locaux) =====================
 const exrLoader = new EXRLoader();
 
-exrLoader.load(ENV_LIBRARY[0].path, (texture) => {
-  texture.mapping = THREE.EquirectangularReflectionMapping;
-  texture.colorSpace = THREE.LinearSRGBColorSpace;
-  scene.background = texture;
-  scene.environment = texture;
-  log('Décor chargé : ' + ENV_LIBRARY[0].name);
-}, (xhr) => {
-  if (xhr.total) loadFill.style.width = Math.min(100, (xhr.loaded/xhr.total*100)).toFixed(0) + '%';
-}, (err) => log('Erreur EXR (' + ENV_LIBRARY[0].path + '): ' + err.message));
+// Le chargement du décor de départ attend maintenant la sélection de l'utilisateur
+// dans le menu (voir loadInitialEnvironment(), appelée depuis le clic sur une vignette).
 
 // Disque de sol retiré : un plan large (rayon 30) vu presque "de tranche" à
 // hauteur d'œil en VR/AR traverse tout l'écran comme une bande horizontale
@@ -507,74 +533,138 @@ function loadImageCORS(url) {
   });
 }
 
-function drawInfoPanel(panel, title, body, subtitle='', photoImg=null, sonoImg=null) {
+// Petit badge coloré indiquant le type d'enregistrement (chant/cri/tambourinage...),
+// traduit depuis le champ `type` de Xeno-canto quand disponible.
+function buildRecordingTag(rec) {
+  if (!rec.type) return null;
+  const t = rec.type.toLowerCase();
+  if (t.includes('song')) return 'Chant';
+  if (t.includes('call')) return 'Cri';
+  if (t.includes('drum')) return 'Tambourinage';
+  if (t.includes('alarm')) return 'Alarme';
+  if (t.includes('flight')) return 'En vol';
+  return rec.type.charAt(0).toUpperCase() + rec.type.slice(1);
+}
+
+function drawInfoPanel(panel, title, body, subtitle='', photoImg=null, sonoImg=null, tag=null) {
   const canvas = panel.canvas;
   const ctx = canvas.getContext('2d');
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
 
-  // Ombre portée douce derrière le panneau, pour mieux le détacher du décor
+  // ----- Fond en dégradé (plus profond en bas), avec ombre portée douce -----
   ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.45)';
-  ctx.shadowBlur = 28;
-  ctx.shadowOffsetY = 8;
-  ctx.fillStyle = 'rgba(10, 28, 18, 0.82)';
-  roundRect(ctx, 10, 10, canvas.width-20, canvas.height-20, 28); ctx.fill();
+  ctx.shadowColor = 'rgba(0,0,0,0.5)';
+  ctx.shadowBlur = 32;
+  ctx.shadowOffsetY = 10;
+  const bgGrad = ctx.createLinearGradient(0, 10, 0, H-10);
+  bgGrad.addColorStop(0, 'rgba(18, 42, 28, 0.90)');
+  bgGrad.addColorStop(1, 'rgba(8, 20, 14, 0.92)');
+  ctx.fillStyle = bgGrad;
+  roundRect(ctx, 10, 10, W-20, H-20, 30); ctx.fill();
   ctx.restore();
-  ctx.strokeStyle = 'rgba(150, 220, 180, 0.55)'; ctx.lineWidth = 2.5;
-  roundRect(ctx, 10, 10, canvas.width-20, canvas.height-20, 28); ctx.stroke();
 
-  // Photo de l'espèce (haut-droit), en médaillon arrondi
+  // Liseré double : lueur douce extérieure + trait net intérieur
+  ctx.strokeStyle = 'rgba(150, 220, 180, 0.22)'; ctx.lineWidth = 8;
+  roundRect(ctx, 10, 10, W-20, H-20, 30); ctx.stroke();
+  ctx.strokeStyle = 'rgba(180, 235, 200, 0.65)'; ctx.lineWidth = 2;
+  roundRect(ctx, 10, 10, W-20, H-20, 30); ctx.stroke();
+
+  // ----- Photo de l'espèce (haut-droit), médaillon avec halo -----
   const hasPhoto = !!photoImg;
-  const photoBox = { x: canvas.width-236, y: 32, w: 200, h: 200, r: 20 };
+  const photoBox = { x: W-236, y: 34, w: 200, h: 200, r: 22 };
   if (hasPhoto) {
+    // Halo doux derrière le médaillon
+    ctx.save();
+    ctx.shadowColor = 'rgba(150,220,180,0.5)';
+    ctx.shadowBlur = 22;
+    ctx.fillStyle = 'rgba(150,220,180,0.15)';
+    roundRect(ctx, photoBox.x-4, photoBox.y-4, photoBox.w+8, photoBox.h+8, photoBox.r+4); ctx.fill();
+    ctx.restore();
+
     ctx.save();
     roundRect(ctx, photoBox.x, photoBox.y, photoBox.w, photoBox.h, photoBox.r);
     ctx.clip();
-    // Recadrage centré type "object-fit: cover"
     const ir = photoImg.width / photoImg.height, br = photoBox.w / photoBox.h;
     let sx=0, sy=0, sw=photoImg.width, sh=photoImg.height;
     if (ir > br) { sw = photoImg.height*br; sx = (photoImg.width-sw)/2; }
     else { sh = photoImg.width/br; sy = (photoImg.height-sh)/2; }
     ctx.drawImage(photoImg, sx, sy, sw, sh, photoBox.x, photoBox.y, photoBox.w, photoBox.h);
     ctx.restore();
-    ctx.strokeStyle = 'rgba(150,220,180,0.65)'; ctx.lineWidth = 2.5;
+    ctx.strokeStyle = 'rgba(220,245,230,0.8)'; ctx.lineWidth = 2.5;
     roundRect(ctx, photoBox.x, photoBox.y, photoBox.w, photoBox.h, photoBox.r); ctx.stroke();
+
+    ctx.font = 'italic 13px system-ui, sans-serif';
+    ctx.fillStyle = 'rgba(200,235,210,0.55)';
+    ctx.textAlign = 'center';
+    ctx.fillText('Photo : Wikipedia', photoBox.x + photoBox.w/2, photoBox.y + photoBox.h + 22);
+    ctx.textAlign = 'left';
   }
 
-  const textMaxWidth = hasPhoto ? photoBox.x - 64 : canvas.width - 88;
+  const textMaxWidth = hasPhoto ? photoBox.x - 64 : W - 88;
 
-  ctx.fillStyle = '#eafff0';
-  ctx.font = '600 42px system-ui, sans-serif';
-  ctx.fillText(title, 44, 72);
+  // ----- Icône + titre -----
+  ctx.font = '600 44px system-ui, sans-serif';
+  ctx.fillStyle = '#f2fff6';
+  ctx.fillText('🐦 ' + title, 44, 76);
 
-  let bodyStartY = 132;
+  let cursorY = 76;
   if (subtitle) {
-    ctx.font = 'italic 24px system-ui, sans-serif';
-    ctx.fillStyle = 'rgba(200,235,210,0.75)';
-    ctx.fillText(subtitle, 44, 104);
-    bodyStartY = 148;
+    cursorY += 36;
+    ctx.font = 'italic 25px system-ui, sans-serif';
+    ctx.fillStyle = 'rgba(205,238,215,0.78)';
+    ctx.fillText(subtitle, 44, cursorY);
   }
 
+  // Badge du type d'enregistrement (pilule colorée), aligné à droite du titre
+  if (tag) {
+    ctx.font = '600 18px system-ui, sans-serif';
+    const tw = ctx.measureText(tag).width;
+    const padX = 16, pillW = tw + padX*2, pillH = 34;
+    const pillX = Math.min(44 + textMaxWidth - pillW, W - 44 - pillW);
+    const pillY = 30;
+    ctx.fillStyle = 'rgba(150,220,180,0.18)';
+    roundRect(ctx, pillX, pillY, pillW, pillH, pillH/2); ctx.fill();
+    ctx.strokeStyle = 'rgba(180,235,200,0.5)'; ctx.lineWidth = 1.5;
+    roundRect(ctx, pillX, pillY, pillW, pillH, pillH/2); ctx.stroke();
+    ctx.fillStyle = 'rgba(220,250,230,0.95)';
+    ctx.fillText(tag, pillX + padX, pillY + 23);
+  }
+
+  // Séparateur dégradé sous l'en-tête
+  cursorY += 26;
+  const divGrad = ctx.createLinearGradient(44, 0, 44+textMaxWidth, 0);
+  divGrad.addColorStop(0, 'rgba(180,235,200,0.5)');
+  divGrad.addColorStop(1, 'rgba(180,235,200,0)');
+  ctx.strokeStyle = divGrad; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(44, cursorY); ctx.lineTo(44+textMaxWidth, cursorY); ctx.stroke();
+
+  // ----- Corps de texte -----
+  let bodyStartY = cursorY + 40;
   ctx.font = '23px system-ui, sans-serif';
-  ctx.fillStyle = 'rgba(234,255,240,0.88)';
+  ctx.fillStyle = 'rgba(236,255,242,0.9)';
   const lines = body.split('\n');
   const wrapped = [];
   lines.forEach(line => wrapped.push(...wrapText(ctx, line, textMaxWidth)));
-  wrapped.forEach((line, i) => ctx.fillText(line, 44, bodyStartY + i*33));
+  wrapped.forEach((line, i) => ctx.fillText(line, 44, bodyStartY + i*34));
 
-  // Sonogramme du chant (bande basse) — image réelle fournie par Xeno-canto
-  const sonoBox = { x: 44, y: canvas.height-160, w: canvas.width-88, h: 112 };
+  // ----- Sonogramme du chant (bande basse) — image réelle fournie par Xeno-canto -----
+  const sonoBox = { x: 44, y: H-166, w: W-88, h: 116 };
   if (sonoImg) {
-    ctx.fillStyle = 'rgba(255,255,255,0.07)';
-    roundRect(ctx, sonoBox.x, sonoBox.y-26, sonoBox.w, sonoBox.h+26, 12); ctx.fill();
-    ctx.font = '15px system-ui, sans-serif';
-    ctx.fillStyle = 'rgba(200,235,210,0.68)';
-    ctx.fillText('Sonogramme du chant (Xeno-canto)', sonoBox.x+10, sonoBox.y-8);
+    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+    roundRect(ctx, sonoBox.x, sonoBox.y-30, sonoBox.w, sonoBox.h+30, 14); ctx.fill();
+    ctx.strokeStyle = 'rgba(150,220,180,0.3)'; ctx.lineWidth = 1.5;
+    roundRect(ctx, sonoBox.x, sonoBox.y-30, sonoBox.w, sonoBox.h+30, 14); ctx.stroke();
+    ctx.font = '600 15px system-ui, sans-serif';
+    ctx.fillStyle = 'rgba(210,240,220,0.75)';
+    ctx.fillText('〰 Sonogramme du chant — Xeno-canto', sonoBox.x+14, sonoBox.y-10);
     // object-fit: contain, centré dans la bande
     const ir = sonoImg.width / sonoImg.height, br = sonoBox.w / sonoBox.h;
-    let dw = sonoBox.w, dh = sonoBox.h;
-    if (ir > br) { dh = sonoBox.w / ir; } else { dw = sonoBox.h * ir; }
+    let dw = sonoBox.w-20, dh = sonoBox.h-10;
+    if (ir > (dw/dh)) { dh = dw / ir; } else { dw = dh * ir; }
     const dx = sonoBox.x + (sonoBox.w-dw)/2, dy = sonoBox.y + (sonoBox.h-dh)/2;
+    ctx.fillStyle = 'rgba(255,255,255,0.94)';
+    roundRect(ctx, dx-4, dy-4, dw+8, dh+8, 6); ctx.fill();
     ctx.drawImage(sonoImg, dx, dy, dw, dh);
   }
 
@@ -768,10 +858,11 @@ async function showNextBird() {
   const title = rec.en || species.common;
   const scientific = [rec.gen, rec.sp].filter(Boolean).join(' ') || species.scientific;
   const bodyText = buildBirdDescription(rec);
+  const tag = buildRecordingTag(rec);
 
   // Affichage immédiat sans photo/sonogramme (ne pas faire attendre l'utilisateur),
   // puis ré-affichage enrichi dès que les images arrivent.
-  drawInfoPanel(birdInfoPanel, title, bodyText, scientific);
+  drawInfoPanel(birdInfoPanel, title, bodyText, scientific, null, null, tag);
 
   materialize(bird, 2.2, () => {
     showInfoPanel(birdInfoPanel, bird.position);
@@ -784,7 +875,7 @@ async function showNextBird() {
   ]);
   const photoImg = await loadImageCORS(photoUrl);
   if (photoImg || sonoImg) {
-    drawInfoPanel(birdInfoPanel, title, bodyText, scientific, photoImg, sonoImg);
+    drawInfoPanel(birdInfoPanel, title, bodyText, scientific, photoImg, sonoImg, tag);
   }
 }
 
@@ -1137,6 +1228,52 @@ function cycleEnvironment() {
 
 // Déclenchement : touche N (test desktop) ou gâchette d'un contrôleur Quest
 window.addEventListener('keydown', (e) => { if (e.key === 'n' || e.key === 'N') cycleEnvironment(); });
+
+// ===================== MENU DE SÉLECTION DU DÉCOR =====================
+// Étape avant l'entrée en VR/AR : grille de vignettes cliquables. Fonctionne
+// nativement avec le pointeur-contrôleur du navigateur Quest (pas besoin de
+// coder une navigation au joystick) et avec le tactile sur téléphone.
+function buildEnvMenu() {
+  const grid = document.getElementById('envGrid');
+  ENV_LIBRARY.forEach((env, i) => {
+    const card = document.createElement('div');
+    card.className = 'envCard';
+    card.style.backgroundColor = env.fallbackColor;
+    // Tente la vignette webp ; si absente, le dégradé de couleur de repli reste visible.
+    const testImg = new Image();
+    testImg.onload = () => { card.style.backgroundImage = `url('${env.thumb}')`; };
+    testImg.src = env.thumb;
+    const label = document.createElement('span');
+    label.textContent = env.name;
+    card.appendChild(label);
+    card.addEventListener('click', () => selectEnvironment(i));
+    grid.appendChild(card);
+  });
+}
+buildEnvMenu();
+
+function selectEnvironment(index) {
+  envCycleIndex = index;
+  const env = ENV_LIBRARY[index];
+  document.getElementById('envMenu').style.display = 'none';
+  document.getElementById('enterStep').style.display = 'block';
+  loadFill.style.width = '0%';
+  log('Chargement du décor : ' + env.name + '...');
+  exrLoader.load(env.path, (texture) => {
+    texture.mapping = THREE.EquirectangularReflectionMapping;
+    texture.colorSpace = THREE.LinearSRGBColorSpace;
+    scene.background = texture;
+    scene.environment = texture;
+    log('Décor chargé : ' + env.name);
+  }, (xhr) => {
+    if (xhr.total) loadFill.style.width = Math.min(100, (xhr.loaded/xhr.total*100)).toFixed(0) + '%';
+  }, (err) => log('Erreur EXR (' + env.path + '): ' + err.message));
+}
+
+document.getElementById('backToMenuBtn').addEventListener('click', () => {
+  document.getElementById('enterStep').style.display = 'none';
+  document.getElementById('envMenu').style.display = 'block';
+});
 
 // ===================== VR ENTRY =====================
 const vrButtonEl = VRButton.createButton(renderer);

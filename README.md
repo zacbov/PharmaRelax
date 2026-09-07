@@ -212,6 +212,49 @@ que de bloquer.
 Pour ajuster la liste ou le rythme : `BIRD_SPECIES_LIST` (ajouter/retirer des espèces,
 n'importe quel nom scientifique reconnu par Xeno-canto) et `BIRD_CYCLE_INTERVAL`.
 
+## Nouveau : menu de sélection du décor avant l'entrée en VR/AR
+Un écran de sélection précède maintenant le bouton "Entrer en VR" : grille de
+vignettes cliquables, une par environnement de `ENV_LIBRARY`. Fonctionne
+**nativement** avec le pointeur-contrôleur du navigateur Quest (pas de code de
+navigation au joystick nécessaire) et avec le tactile sur téléphone — aucune
+complexité supplémentaire ajoutée pour ça.
+
+**Vignettes WebP à ajouter** (comme convenu, format léger) dans
+`assets/env/thumbs/` :
+- `mossy_forest.webp`
+- `autumn_forest.webp`
+- `lauter_waterfall.webp`
+- `preller_drive.webp`
+- `rainforest_trail.webp`
+
+**Tant qu'une vignette est absente**, un dégradé de couleur de repli s'affiche à
+la place (une couleur par décor, définie dans `ENV_LIBRARY[].fallbackColor`) —
+le menu reste utilisable et propre visuellement même sans les images. Dès
+qu'un fichier `.webp` apparaît au bon endroit, il remplace automatiquement le
+dégradé sans rien changer au code.
+
+Après sélection, le décor choisi se charge (barre de progression déplacée dans
+l'étape suivante), puis les boutons VR/AR habituels apparaissent, avec un lien
+"← Changer de décor" pour revenir en arrière avant d'entrer.
+Fonctions clés : `buildEnvMenu()`, `selectEnvironment()` dans `index.html`.
+Note : les fichiers `.exr` ne peuvent pas s'afficher directement comme
+vignettes (pas de support navigateur), d'où le besoin de ces JPG/WebP dédiés —
+souvent déjà fournis sur la page de téléchargement Poly Haven de chaque HDRI.
+
+## Nouveau : redesign du panneau Xeno-canto
+- **Fond en dégradé** (vert profond → presque noir) plutôt qu'une couleur plate,
+  avec liseré double (lueur douce extérieure + trait net) pour un rendu plus soigné.
+- **Icône 🐦 devant le titre**, séparateur en dégradé sous le sous-titre (nom
+  scientifique) pour bien distinguer l'en-tête du corps de texte.
+- **Badge de type d'enregistrement** ("Chant", "Cri", "Tambourinage"...) en
+  pilule colorée, dérivé du champ `type` de Xeno-canto (`buildRecordingTag()`).
+- **Photo** : halo lumineux doux derrière le médaillon plutôt qu'un simple trait,
+  légende "Photo : Wikipedia" en dessous (attribution claire de la source).
+- **Sonogramme** : encadré dans une carte dédiée avec bordure et fond blanc
+  (cohérent avec le rendu naturel d'un spectrogramme), légende avec icône `〰`.
+- Aperçu généré et vérifié visuellement avant livraison (via `node-canvas`, en
+  dehors du projet) — voir capture jointe à la conversation.
+
 ## Nouveau : 35 espèces au total
 29 espèces européennes supplémentaires ajoutées à `BIRD_SPECIES_LIST` (35 au total
 avec les 6 d'origine) : mésange bleue, sittelle, grimpereau, troglodyte, pouillot

@@ -2,7 +2,7 @@
 // fonctionnement 100% hors-ligne après la première visite.
 // Attention : incrémente CACHE_NAME à chaque mise à jour de l'app pour
 // forcer le rechargement du cache (sinon le Quest gardera l'ancienne version).
-const CACHE_NAME = 'clairiere-v9';
+const CACHE_NAME = 'clairiere-v11';
 
 const ASSETS_TO_CACHE = [
   './',
@@ -13,6 +13,11 @@ const ASSETS_TO_CACHE = [
   // voir la règle de cache dynamique same-origin plus bas. Ça évite de précharger
   // ~250 Mo d'un coup à la première visite).
   './assets/env/mossy_forest_4k.exr',
+  './assets/env/thumbs/mossy_forest.webp',
+  './assets/env/thumbs/autumn_forest.webp',
+  './assets/env/thumbs/lauter_waterfall.webp',
+  './assets/env/thumbs/preller_drive.webp',
+  './assets/env/thumbs/rainforest_trail.webp',
   './assets/models/fraxinelle.ksplat',
   './assets/models/papillon.glb',
   './assets/models/libellule.glb',
