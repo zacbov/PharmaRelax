@@ -1,398 +1,85 @@
-# Clairière — App de relaxation VR (Quest 2, hors-ligne)
+# Clairière — espace de relaxation VR (Quest) + AR téléphone
 
-## Contenu du dossier
-- `index.html` — l'application (scène, faune animée, audio binaural, Xeno-canto, splat)
-- `sw.js` — Service Worker qui met tout en cache pour un fonctionnement 100% hors-ligne
-- `manifest.json` — permet d'installer un raccourci sur l'écran d'accueil du Quest
-- `assets/env/mossy_forest_4k.exr` — le décor 360° (forêt moussue)
-- `assets/models/fraxinelle.ksplat` — ta première plante en Gaussian Splatting
-- `assets/audio/` — **à compléter** : dépose ici `foret-ambiance.mp3` et
-  `foret-ruisseau.mp3` (liens CC0 ci-dessous)
+Une forêt vivante autour de toi : un **décor vidéo 360° en boucle**, les chants
+d'oiseaux réels de Xeno-canto (avec fiche : photo, sonogramme, lieu d'enregistrement),
+un papillon et une libellule en vol, une plante en gaussian splat, des sons de forêt.
+Aucun déplacement requis.
 
-## ⚠️ Étape manuelle requise : les sons
-Deux fichiers audio CC0 (domaine public, zéro contrainte de licence) trouvés sur
-BigSoundBank. Télécharge-les et place-les dans `assets/audio/` sous ces noms exacts :
-- `foret-ambiance.mp3` ← https://bigsoundbank.com/UPLOAD/mp3/0100.mp3
-- `foret-ruisseau.mp3` ← https://bigsoundbank.com/UPLOAD/mp3/2713.mp3
+## Ce qui a changé : plus de HDRI, une seule vidéo
+Les cinq décors EXR statiques, le menu de choix, la touche `N` / la gâchette qui
+changeaient de décor et le fondu croisé entre HDRI sont **retirés**. Le décor est
+maintenant **un seul fichier vidéo équirectangulaire**, rendu comme dans Respire :
 
-## Note sur le lupin.ply
-Retiré de cette version : 99 806 points bruts (non compressés) étaient trop lourds
-pour un rendu fluide en VR. La fraxinelle en `.ksplat` (4,8 Mo, compressée) le
-remplace comme preuve de concept pour le pipeline splat → app. Le même traitement
-(allègement + export `.ksplat`) pourra être appliqué au lupin plus tard si tu veux
-le réintégrer.
+- **Dans le casque : couche média WebXR** (`USE_XR_MEDIA_LAYER = true`). La vidéo est
+  confiée au compositeur du Quest au lieu d'être recopiée à chaque image dans une
+  texture WebGL (c'est ce qui évite les artefacts/scintillements en haute résolution).
+- **Repli automatique sur une sphère WebGL** : aperçu sur PC, AR téléphone, navigateur
+  sans couches WebXR, ou `VIDEO_LETTERBOX` > 0.
+- Réglages en haut du bloc « DÉCOR VIDÉO » de `index.html`, **repris tels quels de ta
+  version de Respire** : `VIDEO_YAW_DEG` (orientation), `VIDEO_BRIGHTNESS`,
+  `VIDEO_LETTERBOX`, `VIDEO_STEREO`. Orientation ou luminosité à ajuster : c'est là.
 
-## Installation (une seule fois, avec du réseau)
-1. Héberge ce dossier quelque part en HTTPS : GitHub Pages est le plus simple et gratuit
-   (pousse le dossier dans un repo, active Pages, tu obtiens une URL du style
-   `https://tonuser.github.io/tonrepo/`).
-2. Ouvre cette URL dans le navigateur du Quest — même sur le WiFi capricieux de la fac,
-   ou en partageant la connexion de ton téléphone.
-3. **Laisse la page charger entièrement** (la barre de chargement doit atteindre 100% —
-   c'est le téléchargement du fichier EXR de 31 Mo, ça peut prendre un moment).
-4. Une fois chargée, le Service Worker (`sw.js`) met automatiquement tout en cache.
-   Dans le menu du navigateur : **"Ajouter à l'écran d'accueil"** → tu obtiens une icône
-   cliquable dans la bibliothèque du Quest.
+### Où mettre la vidéo
+Un dossier **`asset/`** (ou `assets/`, `assets/video/`, `video/`) à côté de
+`index.html`, avec l'un de ces noms :
 
-## Après l'installation : zéro réseau nécessaire
-Le Service Worker sert tous les fichiers depuis le cache local du casque. Tu peux couper
-le WiFi et l'app fonctionnera normalement — décor, splat de fraxinelle, abeille, oiseau,
-libellules/papillons.
+| Nom de fichier | Remarque |
+|---|---|
+| `clairiere.webm` / `clairière.webm` | recommandé |
+| `foret.webm` | aussi accepté |
 
-**Exception** : le chant d'oiseau récupéré via Xeno-canto est mis en cache seulement
-*après* la première fois où il a été téléchargé avec succès. Donc : la toute première
-fois, assure-toi d'avoir du réseau au moins le temps que le message
-"Chant réel chargé" apparaisse en bas de l'écran. Ensuite, il rejouera hors-ligne.
+`.mp4` accepté aussi, majuscule initiale tolérée (`Clairiere.webm`), accents
+tolérés (forme macOS ou Windows). **Pour un autre nom, ajoute-le dans `names`** (liste
+`DECORS`) — mais garde la liste courte : chaque combinaison dossier × nom × orthographe ×
+extension est testée par une requête, toutes lancées en parallèle (64 aujourd'hui).
+Un fichier absent ou illisible affiche un avertissement orange sur l'écran d'accueil
+et la scène reste sur un fond sombre.
 
-## Mettre à jour l'app plus tard
-Le cache est agressif par design (c'est le but, pour l'offline). Si tu modifies
-`index.html` ou ajoutes des assets, **incrémente `CACHE_NAME` dans `sw.js`**
-(ex: `clairiere-v1` → `clairiere-v2`), sinon le Quest continuera de servir l'ancienne
-version depuis son cache. Il faudra aussi une reconnexion réseau ponctuelle pour que
-le nouveau cache se télécharge.
+### Format, codec, résolution
+- 3840×2160 (4K) fonctionne dans le casque. Au-delà (8K), ce qui compte est le
+  décodeur matériel du Quest et le codec, **pas le poids du fichier** (un fichier de
+  30 Mo peut être illisible, un de 300 Mo parfaitement lu). La couche média est
+  précisément ce qui évite les scintillements en 8K en mode sphère (voir le README de
+  Respire). Si une vidéo ne se lit pas, essaie un autre codec (VP9, H.264, H.265) ou une
+  résolution plus basse (5760×2880).
+- Vidéo 16:9 (1920×1080, 3840×2160) : étirée sur toute la sphère, ce qui est correct si
+  elle a été exportée ainsi depuis du 360° (cas le plus courant). Si elle contient du
+  2:1 avec des bandes noires, règle `VIDEO_LETTERBOX`.
+- La vidéo se charge dès l'ouverture de la page (muette, donc lecture automatique
+  autorisée) ; la barre de chargement suit le téléchargement. Appuyer sur « Entrer »
+  avant la fin n'est pas bloquant : le décor apparaît en fondu dès qu'il est prêt.
 
-## Prochaines étapes
-1. **Sons d'ambiance** : voir l'étape manuelle ci-dessus (2 fichiers CC0 à déposer).
-2. **Autres splats de plantes (.ksplat)** : ajoute d'autres `splatViewer.addSplatScene(...)`
-   dans `index.html` avec leurs propres position/rotation/scale.
-3. **Modèles .glb** (abeille, oiseau, libellules, papillons) : remplaceront les
-   géométries procédurales actuelles. Le squelette d'animation (`AnimationMixer`)
-   sera à brancher si tes modèles ont des clips d'animation.
-4. **Espèce d'oiseau** : change `BIRD_SPECIES.scientific` dans `index.html` pour
-   n'importe quelle espèce Xeno-canto (ex: `Turdus merula` pour le merle noir).
-5. **Version nuit** : `toggleDayNight()` est le point d'entrée prévu — il faudra
-   une 2e image EXR nocturne + des sons de chouette/hibou/cigales.
-6. **EXR trop lourd** : si le chargement est trop long, convertis le en JPG
-   "tonemapped" (perte de la plage dynamique HDR mais fichier ~5x plus léger) —
-   suffisant pour une skybox, moins pour de vrais reflets PBR.
+### Éclairage des modèles 3D (sans HDRI)
+Les HDRI servaient aussi d'éclairage ambiant aux modèles 3D. À la place :
+une lumière hémisphérique (un peu plus forte qu'avant) **teintée par la vidéo** :
+la zone devant toi est échantillonnée dans une miniature de 16×8 px, une première fois
+avant l'entrée en VR puis toutes les 15 s (jamais plus souvent, pour ne pas provoquer
+d'à-coup dans le casque). `AMBIENT_FROM_VIDEO = false` désactive ; si la lecture de
+l'image est impossible (couche média), les couleurs par défaut restent.
 
-## Nouveau : nom scientifique, rayons de lumière, respiration de l'espace
-- **Nom scientifique** : affiché en italique sous le titre dans le panneau pédagogique,
-  construit à partir de `rec.gen` + `rec.sp` (genre + espèce réels de l'enregistrement
-  Xeno-canto, avec repli sur `BIRD_SPECIES.scientific` si absent).
-- **Rayons de lumière volumétriques** : 5 rayons fins en rendu additif, orientés selon
-  la direction du soleil, avec léger scintillement et balancement organique. Technique
-  légère (pas de post-processing/EffectComposer) adaptée au GPU mobile du Quest 2.
-- **Respiration de l'espace** : très léger mouvement sinusoïdal (quelques millimètres)
-  appliqué au `rig` — jamais à la caméra directement, pour rester compatible avec le
-  tracking VR — qui casse la sensation de rigidité totale sans jamais provoquer de gêne.
+## Ce qui n'a pas changé
+Oiseaux (35 espèces, Xeno-canto, un nouvel oiseau toutes les 20 s, ordre aléatoire,
+fiche avec photo Wikipedia + sonogramme), papillon et libellule `.glb` (battement
+d'ailes par calcul des sommets, trajectoire de vol), gaussian splat (fraxinelle),
+pollen, rayons de lumière, ombres de contact, sons de forêt avec fondus, mode AR
+téléphone, qualité réduite sur mobile, service worker.
 
-## Nouveau : réalisme visuel
-- **Pollen / poussière de lumière** : 140 particules qui montent doucement en oscillant,
-  rendu additif pour un effet lumineux dans les rayons de soleil.
-- **Ombres de contact** : sous l'abeille et l'oiseau, s'assombrissent/rétrécissent selon
-  la hauteur de vol — ancre visuellement les créatures dans l'espace.
-- **Brouillard `FogExp2`** réactivé pour la profondeur.
-- ~~Brume au sol~~ — supprimée depuis (voir section dédiée plus bas).
+Les rayons de lumière (`godRaysGroup`) sont orientés vers un « soleil » fixe : ils ne
+suivent pas la lumière de la vidéo. Si ça jure avec ton décor, mets `rayCount` à 0 dans l'objet `QUALITY` (en haut de `index.html`).
 
-## Nouveau : séquence pédagogique (chant → apparition → fiche Xeno-canto)
-Quand le chant Xeno-canto démarre, l'oiseau se **matérialise** (effet de dissolution :
-scale-in avec léger rebond + pluie d'étincelles), puis un **panneau flottant** apparaît
-en fondu à côté de lui, toujours tourné vers le spectateur. Le contenu du panneau n'est
-**pas écrit en dur** : il est construit dynamiquement à partir des métadonnées réelles
-de l'enregistrement Xeno-canto (type de chant, lieu, date, enregistreur — voir
-`buildBirdDescription()` dans `index.html`). Le titre utilise le nom anglais retourné
-par l'API (`rec.en`), avec repli sur `BIRD_SPECIES.common` si absent.
-Le même effet de matérialisation s'applique à la fraxinelle en splat dès son chargement.
-Fonctions clés : `materialize()`, `spawnSparkleBurst()`, `createInfoPanel()`,
-`drawInfoPanel()`, `buildBirdDescription()`.
-Pour ajouter d'autres espèces plus tard, il suffira d'étendre `BIRD_SPECIES` en tableau
-et de rejouer la même séquence pour chacune — la fiche se construira automatiquement
-à partir de ce que Xeno-canto renvoie, sans texte à rédiger.
-Xeno-canto n'a pas été touché à part la spatialisation déjà en place (le son de l'oiseau
-reste positionné exactement sur son modèle) et cette exploitation de ses métadonnées.
+## Fichiers inutiles maintenant
+`assets/env/*.exr` et `assets/env/thumbs/` ne sont plus utilisés : tu peux les
+supprimer du dépôt (ce sont les plus gros fichiers du projet).
 
-## Nouveau : fondus audio à l'entrée
-L'ambiance de forêt et le ruisseau ne démarrent plus à pleine puissance : fondu progressif
-sur 4s via le nouveau système `fadeValue()` / `updateFades()`, réutilisé aussi pour
-l'apparition en fondu du panneau pédagogique.
+## Service worker
+Pages en « réseau d'abord » (une mise à jour arrive tout de suite, au lieu de
+l'ancienne version restée en cache), Three.js en « cache d'abord ». Les médias
+(vidéo, `.mp3`) ne passent pas par le service worker : il gère mal les requêtes
+Range, et le cache HTTP du navigateur s'en occupe très bien. Cache : `clairiere-v16`.
 
-## Nouveau : architecture générique pour futurs modèles .glb / .ksplat
-Pour ajouter un futur modèle (abeille, oiseau, libellule... en `.glb` ou `.ksplat`),
-**une seule ligne suffit** dans `ASSET_LIBRARY` (`index.html`) — chargement, dissolution
-d'apparition, ombre de contact et (pour les `.glb`) animation par squelette sont déjà
-branchés génériquement, rien d'autre à toucher :
-```js
-{ id: 'abeille-glb', type: 'glb', path: './assets/models/abeille.glb',
-  position: [0, 1.4, -1], scale: 0.06, clipName: 'Fly' },
-```
-Détails :
-- **`.glb`** (`loadGlbCreature`) : charge via `GLTFLoader`, joue automatiquement le clip
-  d'animation nommé (`clipName`) ou le premier trouvé si le modèle a un squelette animé,
-  se matérialise à l'arrivée comme le reste (dissolution + étincelles).
-- **`.ksplat`** (`loadKsplatCreature`) : ajouté au même `DropInViewer` partagé que la
-  fraxinelle, avec la même dissolution — ou l'option `revealSweep: true` pour un effet
-  plus organique de balayage vertical (façon "sortie de terre", via clipping plane
-  Three.js). **Best-effort** : dépend du matériau interne de GaussianSplats3D, à valider
-  visuellement une fois un vrai fichier testé ; repli automatique sur la dissolution
-  classique en cas d'erreur.
-- **Finitions visuelles** (`beautifyModel`) appliquées à tout `.glb` chargé : ombres
-  portées/reçues activées, intensité d'environnement ajustée (cohérence avec la skybox
-  EXR comme éclairage ambiant), léger rim light émissif pour détacher les silhouettes
-  fines (ailes, pattes, antennes) du décor.
-- `flip180: true` disponible pour les deux types si l'export est tête en bas (cas vécu
-  avec la fraxinelle).
-La fraxinelle actuelle est déjà migrée dans ce système (`ASSET_LIBRARY[0]`), donc rien
-n'a changé visuellement pour elle — c'est la même chose, juste réorganisée pour accueillir
-la suite facilement.
-
-## Nouveau : papillon et libellule (.glb), battement d'ailes procédural
-Deux modèles scannés ajoutés (`papillon.glb`, `libellule.glb`, compressés Draco —
-**`DRACOLoader` est maintenant requis et configuré**, sans lui le chargement échoue
-silencieusement). Ces modèles n'ont ni squelette ni animation embarquée (specimens
-scannés à plat, ailes figées ouvertes), donc le vol est simulé par un **shader de
-battement procédural** (`attachWingFlutter` dans `index.html`) : les sommets sont
-pliés autour d'une charnière verticale au centre du corps, avec une amplitude qui
-augmente avec l'éloignement au centre (l'extrémité des ailes bouge plus que le corps).
-**Expérimental** : suppose que l'axe X du modèle correspond à l'envergure des ailes
-(vrai pour un specimen scanné à plat). Si le résultat ne va pas dans le bon sens une
-fois testé en VR, essaie `wingFlutter: { hingeAxis:'z', ... }` dans `ASSET_LIBRARY`,
-ou ajuste `maxAngleDeg`/`flapSpeed` — je n'ai pas pu prévisualiser le rendu réel.
-Réglages actuels : papillon = ample et lent (24°, vitesse 6), libellule = rapide et
-discret (10°, vitesse 16).
-
-## Nouveau : rotation continue de la fraxinelle
-Rotation lente ajoutée (`splatViewer.rotation.y`). **Attention** : le `DropInViewer`
-est partagé par tous les `.ksplat` de `ASSET_LIBRARY` — tant qu'il n'y en a qu'un
-seul (la fraxinelle), cette rotation ne concerne qu'elle. Si un second splat est
-ajouté plus tard, il tournera aussi avec elle ; il faudra alors soit l'accepter,
-soit passer à un `DropInViewer` séparé par splat pour un contrôle indépendant.
-
-## Nouveau : photo de l'espèce + sonogramme dans la fiche pédagogique
-- **Sonogramme** : image réelle fournie directement par Xeno-canto (`rec.sono.med`) —
-  aucune API supplémentaire nécessaire, juste normalisation de l'URL.
-- **Photo de l'espèce** : **nouvelle source externe** — l'API REST publique de
-  Wikipedia (`fetchSpeciesPhotoUrl` dans `index.html`), gratuite et sans clé,
-  puisque Xeno-canto est une archive audio seule (pas de photos). Recherche par nom
-  anglais puis repli sur le nom scientifique si la première page n'existe pas.
-- La fiche s'affiche d'abord sans photo/sonogramme (texte seul, pour ne pas faire
-  attendre l'utilisateur), puis se redessine enrichie dès que les deux images
-  arrivent en parallèle.
-- Panneau agrandi (720×460, plan 0.9×0.575m) pour accueillir la mise en page :
-  titre/nom scientifique en haut-gauche, photo en médaillon haut-droit, texte
-  au milieu, sonogramme en bande basse.
-
-## Nouveau : environnements 100% locaux (fini les appels réseau pour les décors)
-Le mode jour/nuit (qui allait chercher un ciel étoilé sur Poly Haven) est remplacé
-par un **cycle de 5 environnements**, tous locaux (`ENV_LIBRARY` dans `index.html`) :
-forêt moussue (défaut), forêt d'automne, cascade, allée, sentier tropical. Dépose
-les 5 fichiers `.exr` dans `assets/env/` :
-- `mossy_forest_4k.exr` (déjà présent)
-- `autumn_forest_01_4k.exr`
-- `lauter_waterfall_8k.exr`
-- `preller_drive_4k.exr`
-- `rainforest_trail_4k.exr`
-
-Déclenchement inchangé : touche `N` (test desktop) ou gâchette contrôleur en VR —
-passe au décor suivant dans la liste. **Note sur le cache offline** : seul le décor
-par défaut (`mossy_forest_4k.exr`) est pré-mis en cache à l'installation ; les 4
-autres (environ 250 Mo au total à eux cinq) se mettent en cache automatiquement dès
-que tu les charges une première fois via le cycle — évite un premier téléchargement
-énorme d'un coup. Les sons de chouette/cigales du mode nuit ont été retirés (plus de
-vraie "nuit" dans les décors fournis) ; à réintroduire facilement plus tard si tu
-ajoutes un EXR nocturne dédié.
-
-## Suppression : la brume
-Retirée entièrement à ta demande (rendu jugé pas convaincant). Le code (texture,
-génération des nappes, mise à jour dans la boucle de rendu) a été supprimé, pas
-juste désactivé.
-
-## Nouveau : plusieurs oiseaux d'Europe en cycle
-6 espèces européennes défilent automatiquement, une toutes les 20s (`BIRD_CYCLE_INTERVAL`
-dans `index.html`) : rougegorge, merle noir, mésange charbonnière, pinson des arbres,
-rossignol philomèle, chardonneret élégant. Chaque arrivée reprend la séquence pédagogique
-déjà en place (chant Xeno-canto → matérialisation → fiche) et repart en fondu de sortie
-(dissolution inverse + chant qui s'éteint en douceur + fiche qui s'estompe) avant que le
-suivant n'arrive. Fonctions clés : `birdCycleLoop()`, `showNextBird()`, `hideBird()`,
-`dematerialize()` (symétrique de `materialize()`), `fadeOutSound()`, `hideInfoPanel()`.
-Le cycle démarre à l'entrée en VR ou en AR (nécessaire côté navigateur : l'audio ne peut
-démarrer qu'après une interaction utilisateur). Si Xeno-canto ne répond pas pour une
-espèce (hors-ligne, quota), le cycle passe simplement à la suivante au tour d'après plutôt
-que de bloquer.
-Pour ajuster la liste ou le rythme : `BIRD_SPECIES_LIST` (ajouter/retirer des espèces,
-n'importe quel nom scientifique reconnu par Xeno-canto) et `BIRD_CYCLE_INTERVAL`.
-
-## Nouveau : menu de sélection du décor avant l'entrée en VR/AR
-Un écran de sélection précède maintenant le bouton "Entrer en VR" : grille de
-vignettes cliquables, une par environnement de `ENV_LIBRARY`. Fonctionne
-**nativement** avec le pointeur-contrôleur du navigateur Quest (pas de code de
-navigation au joystick nécessaire) et avec le tactile sur téléphone — aucune
-complexité supplémentaire ajoutée pour ça.
-
-**Vignettes WebP à ajouter** (comme convenu, format léger) dans
-`assets/env/thumbs/` :
-- `mossy_forest.webp`
-- `autumn_forest.webp`
-- `lauter_waterfall.webp`
-- `preller_drive.webp`
-- `rainforest_trail.webp`
-
-**Tant qu'une vignette est absente**, un dégradé de couleur de repli s'affiche à
-la place (une couleur par décor, définie dans `ENV_LIBRARY[].fallbackColor`) —
-le menu reste utilisable et propre visuellement même sans les images. Dès
-qu'un fichier `.webp` apparaît au bon endroit, il remplace automatiquement le
-dégradé sans rien changer au code.
-
-Après sélection, le décor choisi se charge (barre de progression déplacée dans
-l'étape suivante), puis les boutons VR/AR habituels apparaissent, avec un lien
-"← Changer de décor" pour revenir en arrière avant d'entrer.
-Fonctions clés : `buildEnvMenu()`, `selectEnvironment()` dans `index.html`.
-Note : les fichiers `.exr` ne peuvent pas s'afficher directement comme
-vignettes (pas de support navigateur), d'où le besoin de ces JPG/WebP dédiés —
-souvent déjà fournis sur la page de téléchargement Poly Haven de chaque HDRI.
-
-## Nouveau : redesign du panneau Xeno-canto
-- **Fond en dégradé** (vert profond → presque noir) plutôt qu'une couleur plate,
-  avec liseré double (lueur douce extérieure + trait net) pour un rendu plus soigné.
-- **Icône 🐦 devant le titre**, séparateur en dégradé sous le sous-titre (nom
-  scientifique) pour bien distinguer l'en-tête du corps de texte.
-- **Badge de type d'enregistrement** ("Chant", "Cri", "Tambourinage"...) en
-  pilule colorée, dérivé du champ `type` de Xeno-canto (`buildRecordingTag()`).
-- **Photo** : halo lumineux doux derrière le médaillon plutôt qu'un simple trait,
-  légende "Photo : Wikipedia" en dessous (attribution claire de la source).
-- **Sonogramme** : encadré dans une carte dédiée avec bordure et fond blanc
-  (cohérent avec le rendu naturel d'un spectrogramme), légende avec icône `〰`.
-- Aperçu généré et vérifié visuellement avant livraison (via `node-canvas`, en
-  dehors du projet) — voir capture jointe à la conversation.
-
-## Nouveau : 35 espèces au total
-29 espèces européennes supplémentaires ajoutées à `BIRD_SPECIES_LIST` (35 au total
-avec les 6 d'origine) : mésange bleue, sittelle, grimpereau, troglodyte, pouillot
-véloce, fauvette à tête noire, grives (musicienne/draine), étourneau, geai, pie,
-corneille, choucas, pics (épeiche/vert), coucou, tourterelle turque, pigeon ramier,
-bruant jaune, verdier, tarin, bouvreuil, roitelet huppé, accenteur, bergeronnette
-grise, hirondelle rustique, huppe fasciée, loriot, faucon crécerelle, buse variable.
-Avec le mode aléatoire (`BIRD_RANDOM_ORDER`), il faudra ~35 cycles de 20s (~12
-minutes) avant qu'une espèce ne revienne. Certaines de ces espèces (rapaces,
-corvidés) ont des chants plus rares ou moins bien couverts sur Xeno-canto — si
-`fetchBirdSong` ne trouve rien pour l'une d'elles, le cycle passe simplement à la
-suivante (comportement déjà en place, rien à faire de plus).
-
-## Nouveau : perf adaptative mobile, throttle battement d'ailes, fondu croisé décors
-1. **Détection mobile** (`IS_MOBILE`/`QUALITY` en haut de `index.html`) : un
-   téléphone en AR a moins de marge GPU qu'un Quest (GPU XR2 Gen 2 dédié). Sur
-   mobile détecté : pollen réduit à 60 particules (au lieu de 140), rayons de
-   lumière réduits à 2 (au lieu de 4). Détection par `navigator.userAgent`, qui
-   exclut explicitement le navigateur Quest (contient aussi "Android" en
-   interne) pour ne pas le confondre avec un vrai téléphone.
-2. **Battement d'ailes throttlé** : le recalcul CPU de tous les sommets ne se
-   fait plus qu'à 30fps (desktop/Quest) ou 20fps (mobile) plutôt qu'à chaque
-   frame (jusqu'à 90fps) — totalement imperceptible visuellement pour un
-   mouvement aussi doux, mais nettement moins coûteux.
-3. **Fondu croisé entre décors** : `cycleEnvironment()` ne bascule plus
-   brutalement — une grande sphère semi-transparente portant le nouveau décor
-   apparaît en fondu (1,8s) autour de la caméra, puis `scene.background` bascule
-   réellement une fois le fondu terminé (l'ancienne texture est libérée à ce
-   moment-là, comme avant). À tester une fois les 4 EXR supplémentaires en place.
-
-## Nouveau : dispose des textures, mode aléatoire, panneau agrandi
-1. **Fuite mémoire corrigée** : `cycleEnvironment()` appelle maintenant
-   `.dispose()` sur l'ancienne texture EXR avant de charger la suivante — sans
-   ça, chaque changement de décor accumulait une texture 4K/8K en mémoire GPU
-   sans jamais la libérer.
-2. **Mode aléatoire pour les oiseaux** (`BIRD_RANDOM_ORDER = true` dans
-   `index.html`) : système de "pioche mélangée" plutôt que du pur hasard —
-   chaque espèce de `BIRD_SPECIES_LIST` sort une fois avant que la liste soit
-   rebattue, avec une vérification pour éviter qu'une espèce revienne juste
-   après elle-même. Repasser à `false` pour l'ordre séquentiel d'origine.
-3. **Panneau pédagogique agrandi** (~+30% : canvas 920×580, plan 1.15×0.725m) et
-   quelques finitions : ombre portée douce pour mieux le détacher du décor,
-   textes plus grands (titre 42px, corps 23px), marges plus généreuses, médaillon
-   photo un peu plus grand. Décalage par rapport à l'oiseau légèrement augmenté
-   pour ne pas chevaucher son modèle.
-
-## Correctifs suite à ton dernier retour
-1. **Bande verte au milieu enfin résolue** : ce n'était ni la brume ni le
-   brouillard (déjà retirés), mais un **grand disque de sol oublié** (rayon 30,
-   semi-transparent, reliquat du fallback sous l'ancien `lupin.ply`). Vu presque
-   "de tranche" à hauteur d'œil en VR/AR, un plan aussi large traverse tout
-   l'écran comme une bande horizontale. Supprimé entièrement — le décor 360°
-   montre déjà le sol.
-2. **Son d'ambiance forêt réduit de 50%** (0.3 → 0.15), ruisseau inchangé (0.5).
-3. **Battement d'ailes réécrit en CPU** (au lieu d'un shader GPU via
-   `onBeforeCompile`) : plus lent mais 100% prévisible — je ne pouvais pas
-   garantir le comportement de la mise en cache des programmes de shader de
-   Three.js sans pouvoir tester visuellement. Toujours **expérimental** sur le
-   sens du pli (suppose l'axe X = envergure des ailes).
-4. **Correction d'orientation de vol ajoutée** (`orientationFixDeg` dans
-   `ASSET_LIBRARY`, ex: `flightPath: { kind:'butterfly', orientationFixDeg:[90,0,0] }`)
-   : un modèle scanné à plat (specimen épinglé) n'a pas forcément son axe "avant"
-   aligné avec ce que `lookAt()` attend nativement — c'est probablement la cause
-   du déplacement "bizarre" persistant. **Je n'ai pas pu deviner la bonne valeur
-   sans voir le rendu** : c'est un réglage à tâtonner toi-même (essaie des
-   multiples de 90° sur chaque axe jusqu'à ce que ça vole dans le bon sens).
-
-## Correctifs suite au test papillon/libellule
-1. **Taille doublée** pour les deux modèles (`scale: 2` dans `ASSET_LIBRARY`).
-2. **Bug réel trouvé dans le battement d'ailes** : le centre de charnière était
-   calculé en coordonnées **monde** (incluant la position de vol) au lieu de
-   coordonnées **locales** du modèle. Résultat concret : le papillon tournait tout
-   entier en bloc de façon rigide plutôt que de plier ses ailes, d'où le
-   "comportement étrange" observé. Corrigé dans `attachWingFlutter()` (mesure de
-   la bounding box avec position/rotation/échelle temporairement réinitialisées).
-3. **Modèles procéduraux d'origine retirés** (`createButterfly`, `createDragonfly`
-   et toute la machine à états d'apparitions successives) — remplacés par les vrais
-   `.glb`. Leur **trajectoire de vol orbitale a été reprise telle quelle**
-   (`updateFlyingCreatures()`, activée via `flightPath: { kind, baseZ }` dans
-   `ASSET_LIBRARY`) et appliquée aux nouveaux modèles.
-4. **Brouillard de scène retiré** (`scene.fog`, distinct de la brume au sol déjà
-   supprimée précédemment) — c'était la source du voile vert persistant.
-5. **Sonogramme** : ajout d'un repli via proxy d'image public gratuit
-   (`images.weserv.nl`) dans `loadImageCORS()`. Cause probable du problème :
-   contrairement à Wikipedia, le serveur d'images Xeno-canto ne renvoie
-   probablement pas d'en-têtes CORS, ce qui bloque son usage comme texture WebGL
-   même si l'image s'affiche normalement dans un navigateur classique.
-
-## Sur les ralentissements en AR téléphone
-Non traité ce tour-ci — quelques pistes si ça persiste sur Quest 3 (dont le GPU dédié
-XR2 Gen 2 est nettement plus puissant qu'un téléphone milieu de gamme, donc ce n'est
-pas forcément représentatif) : réduire `POLLEN_COUNT` (140) et `RAY_COUNT` (4), ou
-détecter le mode AR téléphone pour désactiver certains effets automatiquement.
-À voir selon ce que donne le test sur casque.
-
-## Correctifs rendu (historique) : pollen, rayons de lumière
-Bug identifié après un premier test : **espace colorimétrique manquant** sur les
-textures générées par canvas (pollen, rayons, étincelles, ombres) —
-sans `texture.colorSpace = THREE.SRGBColorSpace`, le renderer les affichait
-ternes/désaturées. Corrigé partout (`makeRadialTexture`, `makeRayTexture`).
-Les rayons de lumière ont aussi été adoucis : dégradé désormais en largeur ET en
-longueur (pas seulement en longueur) pour éviter l'effet "rectangle plat", et
-billboard partiel vers la caméra (mélange 60% direction du soleil / 40% face
-caméra) pour limiter l'effet "vu de tranche" en VR stéréo.
-
-## Nouveau : mode AR téléphone (pour debug sans casque)
-Un second bouton "📱 Essayer en AR (téléphone)" a été ajouté à côté du bouton VR
-(`ARButton` de Three.js, à côté de `VRButton`). Utile pour prévisualiser rapidement
-les changements sans avoir à mettre le casque.
-**Prérequis** : Chrome sur Android avec support ARCore (WebXR `immersive-ar`). Sur
-iPhone/Safari, ce mode n'est pas disponible (pas de support WebXR AR natif) — le
-bouton indiquera "AR NOT SUPPORTED" dans ce cas.
-**Note** : la scène a un décor 360° opaque (skybox), donc en AR le décor recouvre
-la vraie pièce plutôt que de s'y mélanger — c'est volontaire pour ce cas d'usage
-(prévisualisation fidèle du rendu final, pas une vraie expérience de réalité mixte).
-
-## Nouveau : mode nuit
-Le mode nuit est maintenant fonctionnel : décor étoilé (Poly Haven "Dikhololo Night",
-chargé à la demande depuis leur CDN), lumière très tamisée, chant d'oiseau + ruisseau
-coupés au profit d'une chouette hulotte et de cigales (CC0, BigSoundBank).
-**Déclenchement** : appuie sur la gâchette (select) de n'importe quel contrôleur Quest
-une fois en VR. Pour tester sans casque, la touche `N` du clavier fonctionne aussi.
-Ces sons/décors de nuit se téléchargent au premier basculement (nécessite du réseau
-cette fois-là), puis sont mis en cache par le Service Worker pour les fois suivantes.
-Une machine à états (`updateEncounters` dans `index.html`) fait apparaître une
-créature à la fois, avec un fondu d'entrée/sortie (1,8s), un vol de 16s sur une
-trajectoire douce — orbite large et lente pour les papillons, plus resserrée et
-rapide pour les libellules — puis une pause de 6s avant la suivante. Le pool
-cycle actuellement entre 2 papillons (couleur aléatoire à chaque rechargement de
-page) et 1 libellule. Réglages ajustables : `FADE_DURATION`, `FLIGHT_DURATION`,
-`PAUSE_BETWEEN`. Remplaçables par des `.glb` plus tard — la machine à états gère
-déjà l'apparition/disparition, seul le contenu visuel de chaque créature change.
-
-## Notes techniques
-- Three.js r160 (modules ES via unpkg) — mis en cache par le Service Worker après
-  le premier chargement, donc lui aussi fonctionne hors-ligne ensuite.
-- `renderer.toneMapping = ACESFilmicToneMapping` pour un rendu correct du EXR HDR.
-- Pas de locomotion imposée : l'utilisateur reste sur place, seule la tête bouge —
-  cohérent avec un espace de relaxation statique.
-- L'abeille et l'oiseau sont des géométries procédurales simples pour l'instant
-  (facilement remplaçables par tes `.glb`), avec battement d'ailes animé par code.
+## Ce qui n'a pas pu être testé (à valider sur le casque)
+Pas de casque ici : la logique est vérifiée par analyse statique (aucun identifiant
+non défini, aucune erreur d'ordre d'initialisation, ids HTML présents) et par
+simulation pour la recherche du fichier. À vérifier : que la vidéo s'affiche et
+tourne en boucle, son orientation, la lisibilité des fiches d'oiseaux sur le nouveau
+fond, et l'éclairage des modèles 3D.

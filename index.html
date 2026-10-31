@@ -9,6 +9,7 @@
 <style>
   html, body { margin:0; padding:0; overflow:hidden; background:#000; height:100%; }
   canvas { display:block; }
+  #VRButton, #ARButton { display: none !important; } /* déclenchés par nos propres boutons */
   #overlay {
     position:fixed; inset:0; display:flex; flex-direction:column;
     align-items:center; justify-content:center; color:#eafff0;
@@ -31,43 +32,19 @@
 <body>
 
 <div id="overlay">
-  <div id="envMenu">
-    <h1>🌿 Clairière</h1>
-    <p>Choisis le décor de ta séance de relaxation.</p>
-    <div id="envGrid"></div>
-  </div>
-
-  <div id="enterStep" style="display:none;">
+  <div id="enterStep">
     <h1>🌿 Clairière</h1>
     <p>Un espace de calme en réalité virtuelle. Mets ton casque, appuie sur le bouton, et laisse-toi porter par la forêt.</p>
     <button id="enterBtn">Entrer en VR</button>
     <button id="enterArBtn" style="margin-top:12px; padding:10px 28px; font-size:14px; border-radius:30px; border:1px solid rgba(111,211,154,0.4); background:transparent; color:#c8ecd8; cursor:pointer;">📱 Essayer en AR (téléphone)</button>
     <div id="loadBar"><div id="loadFill"></div></div>
+    <p id="decorStatus" style="font-size:12px;opacity:0.55;margin-top:10px;">Décor : recherche de la vidéo…</p>
+    <p id="decorWarning" style="font-size:12px;color:#ffcf6b;max-width:420px;margin:6px auto 0;"></p>
     <p style="font-size:12px;opacity:0.5;margin-top:20px;">Aucun déplacement requis — reste simplement assis ou debout et regarde autour de toi.</p>
     <p style="font-size:11px;opacity:0.4;margin-top:6px;">L'AR téléphone nécessite Chrome sur Android (ARCore). Utile pour prévisualiser sans casque.</p>
-    <button id="backToMenuBtn" style="margin-top:16px; background:none; border:none; color:rgba(200,235,210,0.5); font-size:12px; text-decoration:underline; cursor:pointer;">← Changer de décor</button>
   </div>
 </div>
 <div id="status"></div>
-
-<style>
-  #envGrid {
-    display:grid; grid-template-columns: repeat(3, 1fr); gap:14px;
-    max-width:520px; margin-top:24px;
-  }
-  .envCard {
-    position:relative; aspect-ratio: 4/3; border-radius:14px; overflow:hidden;
-    cursor:pointer; border:2px solid rgba(111,211,154,0.25);
-    background-size:cover; background-position:center;
-    display:flex; align-items:flex-end; transition: transform 0.15s, border-color 0.15s;
-  }
-  .envCard:hover, .envCard:focus { transform:scale(1.04); border-color:#6fd39a; }
-  .envCard span {
-    display:block; width:100%; padding:8px 10px; font-size:12px; color:#fff;
-    background:linear-gradient(transparent, rgba(0,0,0,0.75)); text-align:left;
-  }
-  @media (max-width: 480px) { #envGrid { grid-template-columns: repeat(2, 1fr); max-width:320px; } }
-</style>
 
 <script type="importmap">
 {
@@ -81,7 +58,6 @@
 
 <script type="module">
 import * as THREE from 'three';
-import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
@@ -146,21 +122,6 @@ const BIRD_SPECIES_LIST = [
 ];
 const BIRD_CYCLE_INTERVAL = 20; // secondes entre chaque nouvel oiseau
 const BIRD_RANDOM_ORDER = true; // false = séquentiel dans l'ordre de BIRD_SPECIES_LIST
-// Bibliothèque d'environnements 100% locaux — plus aucun appel réseau pour les
-// décors. Ajoute/retire des entrées ici selon les fichiers présents dans
-// assets/env/. Le premier de la liste est chargé par défaut au démarrage.
-const ENV_LIBRARY = [
-  { name: 'Forêt moussue',      path: './assets/env/mossy_forest_4k.exr',
-    thumb: './assets/env/thumbs/mossy_forest.webp',      fallbackColor: '#2e4a30' },
-  { name: 'Forêt d\'automne',   path: './assets/env/autumn_forest_01_4k.exr',
-    thumb: './assets/env/thumbs/autumn_forest.webp',     fallbackColor: '#8a5a2f' },
-  { name: 'Cascade (Lauter)',   path: './assets/env/lauter_waterfall_8k.exr',
-    thumb: './assets/env/thumbs/lauter_waterfall.webp',  fallbackColor: '#3a6a72' },
-  { name: 'Allée (Preller)',    path: './assets/env/preller_drive_4k.exr',
-    thumb: './assets/env/thumbs/preller_drive.webp',     fallbackColor: '#5a6a4a' },
-  { name: 'Sentier tropical',   path: './assets/env/rainforest_trail_4k.exr',
-    thumb: './assets/env/thumbs/rainforest_trail.webp',  fallbackColor: '#1f5a3a' },
-];
 
 // ===================== SCENE =====================
 const scene = new THREE.Scene();
@@ -181,7 +142,8 @@ renderer.toneMappingExposure = 0.9;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
 
-scene.add(new THREE.HemisphereLight(0xbfe3c8, 0x2b1f14, 0.6));
+const hemiLight = new THREE.HemisphereLight(0xbfe3c8, 0x2b1f14, 0.9); // sans HDRI, un peu plus fort qu'avant
+scene.add(hemiLight);
 const sun = new THREE.DirectionalLight(0xfff2d0, 0.8);
 sun.position.set(5, 8, 3);
 scene.add(sun);
@@ -189,20 +151,298 @@ scene.add(sun);
 // Brouillard doux : profondeur, cohérence avec le décor forêt
 // Brouillard de scène retiré (rendait un voile vert perçu comme une brume gênante).
 
-// ===================== SKYBOX (environnements EXR 100% locaux) =====================
-const exrLoader = new EXRLoader();
+// ============================================================================
+// DÉCOR VIDÉO 360° — remplace les HDRI. UN seul fichier équirectangulaire (.webm ou .mp4).
+// ============================================================================
+// Même rendu que Respire : dans le casque, la vidéo est confiée au compositeur du
+// Quest (couche média WebXR) ; repli automatique sur une sphère WebGL (aperçu PC,
+// AR téléphone, navigateur sans couches). Un `scene.background` Three.js ne se
+// rafraîchit pas pour une vidéo : c'est pour ça qu'on ne l'utilise pas.
+const USE_XR_MEDIA_LAYER = true;
+const VIDEO_STEREO = 'mono';   // 'mono' | 'stereo-top-bottom' | 'stereo-left-right' (couche média seulement)
+const VIDEO_YAW_DEG = -90;     // place le CENTRE de l'image face à l'utilisateur
+const VIDEO_BRIGHTNESS = 0.85; // 1 = tel quel, <1 assombrit (aide la lisibilité du texte)
+const VIDEO_LETTERBOX = 0;     // fraction à rogner en haut ET en bas (ex: 0.0556 si la vidéo contient du 2:1 avec des bandes noires)
 
-// Le chargement du décor de départ attend maintenant la sélection de l'utilisateur
-// dans le menu (voir loadInitialEnvironment(), appelée depuis le clic sur une vignette).
+// Où chercher le fichier, et sous quels noms (majuscule initiale et accents tolérés :
+// « Clairiere.webm », « foret.mp4 »…). Pour un autre nom : ajoute-le dans `names`.
+// ⚠ Chaque combinaison dossier × nom × orthographe × extension est testée par une requête
+// (toutes lancées en parallèle) : 64 aujourd'hui. Garde la liste courte.
+const VIDEO_DIRS = ['./asset/', './assets/', './assets/video/', './video/'];
+const VIDEO_EXTS = ['webm', 'mp4'];
+const DECORS = [
+  { label: 'Clairière', names: ['clairiere', 'clairière', 'foret'] },
+];
+const AMBIENT_FROM_VIDEO = true;   // la lumière d'ambiance (modèles 3D) prend les couleurs du décor
 
-// Disque de sol retiré : un plan large (rayon 30) vu presque "de tranche" à
-// hauteur d'œil en VR/AR traverse tout l'écran comme une bande horizontale
-// (c'était la "bande verte" au milieu de l'image). Le décor 360° (skybox EXR)
-// montre déjà le sol/chemin, ce disque était un reliquat inutile depuis le
-// retrait de lupin.ply.
+const $ = (id) => document.getElementById(id);
+async function fileExists(url) {
+  try { const r = await fetch(url, { method: 'HEAD', cache: 'no-store' }); return r.ok; }
+  catch (e) { return false; }
+}
 
-// lupin.ply retiré : trop lourd (99K points bruts) pour un rendu Quest 2 fluide.
-// On passe sur des Gaussian Splats allégés à la place (voir ASSET_LIBRARY plus bas).
+// Animations pilotées par la boucle de rendu (window.requestAnimationFrame ne tourne
+// pas pendant une session VR immersive).
+const tweens = [];
+function tween(from, to, sec, onUpdate) {
+  return new Promise((resolve) => {
+    tweens.push({ from, to, dur: Math.max(0.0001, sec), t: 0, onUpdate, resolve });
+    onUpdate(from);
+  });
+}
+function updateTweens(dt) {
+  for (let i = tweens.length - 1; i >= 0; i--) {
+    const tw = tweens[i];
+    tw.t += dt;
+    const k = Math.min(1, tw.t / tw.dur);
+    const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+    tw.onUpdate(tw.from + (tw.to - tw.from) * e);
+    if (k >= 1) { tweens.splice(i, 1); tw.resolve(); }
+  }
+}
+
+// Éléments de Respire (étoiles, ciel, tutoriel, aide) qui n'existent pas ici : le bloc
+// vidéo les touche, on lui donne des équivalents inertes.
+const stars = { visible: false };
+const skyTexture = null;
+const tutorialPanel = { mesh: { visible: false } };
+function drawTutorial() {}
+function drawHud() {}
+
+let decorList = [];           // [{ label, url }] — seulement les décors trouvés
+let decorChoice = 'random';   // 'random' ou index dans decorList
+let decorIndex = -1, decorBusy = false, videoActive = false;
+let decorReady = false, decorRevealed = false, decorRevealWanted = false;
+let decorOpacity = 0;         // 0 = décor invisible, 1 = pleinement visible (fondus)
+
+const decorVideo = document.createElement('video');
+decorVideo.loop = true; decorVideo.muted = true; decorVideo.playsInline = true;
+decorVideo.preload = 'auto'; decorVideo.crossOrigin = 'anonymous';
+decorVideo.setAttribute('playsinline', '');
+decorVideo.addEventListener('ended', () => { decorVideo.currentTime = 0; decorVideo.play().catch(() => {}); }); // boucle de secours
+
+const decorTexture = new THREE.VideoTexture(decorVideo);
+decorTexture.colorSpace = THREE.SRGBColorSpace;
+decorTexture.minFilter = THREE.LinearFilter; decorTexture.magFilter = THREE.LinearFilter;
+decorTexture.generateMipmaps = false;
+if (VIDEO_LETTERBOX > 0) { decorTexture.repeat.set(1, 1 - 2 * VIDEO_LETTERBOX); decorTexture.offset.set(0, VIDEO_LETTERBOX); }
+
+const decorMat = new THREE.MeshBasicMaterial({
+  map: decorTexture, color: new THREE.Color(VIDEO_BRIGHTNESS, VIDEO_BRIGHTNESS, VIDEO_BRIGHTNESS),
+  toneMapped: false, transparent: true, opacity: 0, depthWrite: false
+});
+const decorGeo = new THREE.SphereGeometry(60, 64, 48);
+decorGeo.scale(-1, 1, 1); // vue de l'intérieur, sans effet miroir
+const decorSphere = new THREE.Mesh(decorGeo, decorMat);
+decorSphere.position.set(0, 1.6, 0);
+decorSphere.rotation.y = THREE.MathUtils.degToRad(VIDEO_YAW_DEG);
+decorSphere.renderOrder = -10;
+decorSphere.visible = false;
+scene.add(decorSphere);
+
+// Voile noir (mode couche média) : la couche vidéo est DERRIÈRE notre rendu et
+// n'a pas d'opacité réglable — on fait donc les fondus avec un voile noir
+// par-dessus. Il applique aussi VIDEO_BRIGHTNESS.
+const veilMat = new THREE.MeshBasicMaterial({
+  color: 0x000000, side: THREE.BackSide, transparent: true, opacity: 1, depthWrite: false, toneMapped: false
+});
+const veil = new THREE.Mesh(new THREE.SphereGeometry(30, 32, 16), veilMat);
+veil.renderOrder = -9; veil.visible = false;
+scene.add(veil);
+
+let mediaLayerMode = false;   // vrai si la session VR en cours affiche la vidéo par couche média
+let mediaBinding = null, mediaLayer = null;
+
+function canUseMediaLayer(session) {
+  if (!USE_XR_MEDIA_LAYER || VIDEO_LETTERBOX > 0 || !session) return false;
+  if (typeof XRMediaBinding === 'undefined' || typeof XRRigidTransform === 'undefined') return false;
+  if (session.renderState.layers === undefined) return false;      // navigateur sans « layers »
+  const base = renderer.xr.getBaseLayer();
+  return !!base && typeof XRProjectionLayer !== 'undefined' && base instanceof XRProjectionLayer;
+}
+function attachMediaLayer() {
+  const session = renderer.xr.getSession();
+  if (!mediaLayerMode || !session || !videoActive) return;
+  try {
+    if (!mediaBinding) mediaBinding = new XRMediaBinding(session);
+    // Même convention que la sphère : VIDEO_YAW_DEG = -90 ⇒ centre de l'image devant soi.
+    const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(VIDEO_YAW_DEG + 90));
+    const layer = mediaBinding.createEquirectLayer(decorVideo, {
+      space: renderer.xr.getReferenceSpace(),
+      layout: VIDEO_STEREO,
+      transform: new XRRigidTransform({ x: 0, y: 0, z: 0, w: 1 }, { x: q.x, y: q.y, z: q.z, w: q.w }),
+      radius: 0, // 0 = sphère infinie (comme un ciel, sans parallaxe)
+      centralHorizontalAngle: Math.PI * 2, upperVerticalAngle: Math.PI / 2, lowerVerticalAngle: -Math.PI / 2,
+    });
+    const old = mediaLayer;
+    session.updateRenderState({ layers: [layer, renderer.xr.getBaseLayer()] }); // vidéo derrière, notre rendu devant
+    mediaLayer = layer;
+    if (old && old.destroy) { try { old.destroy(); } catch (e) {} }
+  } catch (e) {
+    log('Couche média indisponible, repli sur la sphère WebGL : ' + e.message);
+    mediaLayerMode = false; mediaLayer = null;
+  }
+  applyDecorDisplay();
+}
+function detachMediaLayer() {
+  const session = renderer.xr.getSession();
+  if (session && mediaLayer) { try { session.updateRenderState({ layers: [renderer.xr.getBaseLayer()] }); } catch (e) {} }
+  if (mediaLayer && mediaLayer.destroy) { try { mediaLayer.destroy(); } catch (e) {} }
+  mediaLayer = null;
+}
+
+// Applique l'état courant (vidéo ou ciel, couche média ou sphère, opacité)
+function applyDecorDisplay() {
+  if (!videoActive) {
+    decorSphere.visible = false; veil.visible = false;
+    stars.visible = true; scene.background = skyTexture;
+    return;
+  }
+  stars.visible = false;
+  if (mediaLayerMode && mediaLayer) {
+    decorSphere.visible = false;
+    scene.background = null;              // rendu transparent → on voit la couche vidéo derrière
+    veil.visible = true;
+    veilMat.opacity = 1 - decorOpacity * VIDEO_BRIGHTNESS;
+  } else {
+    veil.visible = false;
+    scene.background = skyTexture;
+    decorSphere.visible = true;
+    decorMat.opacity = decorOpacity;
+  }
+}
+function setDecorOpacity(v) { decorOpacity = v; applyDecorDisplay(); }
+
+function setDecorFallback() {
+  videoActive = false; decorReady = false; decorRevealed = false; decorOpacity = 0;
+  detachMediaLayer();
+  applyDecorDisplay();
+}
+function revealDecor() {
+  decorRevealWanted = true;
+  if (!decorReady || decorRevealed) return;
+  decorRevealed = true;
+  tween(decorOpacity, 1, 1.8, setDecorOpacity);
+}
+async function loadDecor(index, { revealNow = false } = {}) {
+  if (index < 0 || !decorList.length) { setDecorFallback(); return; }
+  decorBusy = true; decorReady = false; decorRevealed = false; decorRevealWanted = revealNow;
+  if (videoActive && decorOpacity > 0.01) await tween(decorOpacity, 0, 0.5, setDecorOpacity);
+  decorIndex = index;
+  const ok = await new Promise((resolve) => {
+    const onOk = () => { cleanup(); resolve(true); };
+    const onKo = () => { cleanup(); resolve(false); };
+    const cleanup = () => { decorVideo.removeEventListener('loadeddata', onOk); decorVideo.removeEventListener('error', onKo); };
+    decorVideo.addEventListener('loadeddata', onOk);
+    decorVideo.addEventListener('error', onKo);
+    decorVideo.src = decorList[index].url;
+    decorVideo.load();
+    decorVideo.play().catch(() => {});
+  });
+  if (!ok) { log('Vidéo illisible : ' + decorList[index].url); setDecorFallback(); decorBusy = false; drawHud(); return; }
+  videoActive = true; decorReady = true; decorBusy = false;
+  if (mediaLayerMode) attachMediaLayer(); else applyDecorDisplay();
+  if (tutorialPanel.mesh.visible) drawTutorial();
+  if (decorVideo.videoWidth > 4096 && renderer.xr.isPresenting && !mediaLayerMode) {
+    log('⚠ Vidéo > 4K sans couche média : scintillement probable (voir README)');
+  }
+  if (decorRevealWanted) revealDecor();
+  drawHud();
+}
+function pickInitialDecor() {
+  if (!decorList.length) return -1;
+  if (decorChoice === 'random') return Math.floor(Math.random() * decorList.length);
+  return Math.min(decorChoice, decorList.length - 1);
+}
+function nextDecor() {
+  if (decorBusy || decorList.length < 2) return;
+  loadDecor((decorIndex + 1) % decorList.length, { revealNow: true });
+}
+
+// Recherche des décors par NOM, dans tous les dossiers/extensions/orthographes.
+// Les accents sont essayés sous les deux formes Unicode (NFC et NFD : un fichier
+// « forêt » créé sur Mac n'a pas les mêmes octets que sur Windows/Linux).
+function nameVariants(name) {
+  const out = new Set();
+  for (const n of [name, name.charAt(0).toUpperCase() + name.slice(1)]) {
+    out.add(n.normalize('NFC')); out.add(n.normalize('NFD'));
+  }
+  return [...out];
+}
+async function findDecorFile(decor) {
+  const candidates = [];
+  for (const d of VIDEO_DIRS) for (const n of decor.names) for (const v of nameVariants(n)) for (const e of VIDEO_EXTS) {
+    candidates.push(encodeURI(`${d}${v}.${e}`));
+  }
+  const unique = [...new Set(candidates)];
+  const found = await Promise.all(unique.map(fileExists));
+  const i = found.indexOf(true);  // ordre de priorité : dossier, puis orthographe, puis extension
+  return i >= 0 ? unique[i] : null;
+}
+async function discoverDecors() {
+  const urls = await Promise.all(DECORS.map(findDecorFile));
+  const list = [], missing = [];
+  DECORS.forEach((d, i) => { if (urls[i]) list.push({ label: d.label, url: urls[i] }); else missing.push(d.names[0]); });
+  $('decorWarning').textContent = !list.length
+    ? '⚠ Aucune vidéo de décor trouvée (« clairiere.webm » ou « foret.webm » dans un dossier « asset ») — fond sombre à la place.'
+    : missing.length ? '⚠ Décor(s) introuvable(s) : ' + missing.join(', ') + ' (.webm ou .mp4 dans « asset »)' : '';
+  return list;
+}
+
+
+// Barre de chargement = part de la vidéo déjà téléchargée
+decorVideo.addEventListener('progress', () => {
+  try {
+    const b = decorVideo.buffered;
+    if (b.length && decorVideo.duration) loadFill.style.width = Math.min(100, b.end(b.length - 1) / decorVideo.duration * 100).toFixed(0) + '%';
+  } catch (e) { /* pas grave */ }
+});
+
+// Recherche + chargement dès l'ouverture de la page (vidéo muette : lecture auto autorisée),
+// pour qu'elle soit prête quand on appuie sur « Entrer ».
+async function bootDecor() {
+  const res = await discoverDecors();
+  if (Array.isArray(res)) decorList = res;
+  if (!decorList.length) { $('decorStatus').textContent = 'Décor : aucune vidéo trouvée (fond sombre)'; return; }
+  $('decorStatus').textContent = 'Décor : chargement de la vidéo…';
+  await loadDecor(0);
+  const dims = decorVideo.videoWidth ? ' · ' + decorVideo.videoWidth + '×' + decorVideo.videoHeight : '';
+  $('decorStatus').textContent = videoActive
+    ? 'Décor : vidéo prête' + dims
+    : 'Décor : vidéo illisible (codec ou résolution non supportés ?)';
+}
+
+// Lumière d'ambiance des modèles 3D (papillon, libellule, splat…) : sans HDRI il n'y a plus
+// d'éclairage par l'image ; on échantillonne donc la vidéo (zone devant l'utilisateur) pour
+// teinter le ciel/sol de la lumière hémisphérique. Rare (toutes les 15 s) pour ne jamais
+// provoquer d'à-coup dans le casque ; sans effet (couleurs par défaut) si la lecture de
+// l'image est impossible.
+const ambSampleCanvas = document.createElement('canvas'); ambSampleCanvas.width = 16; ambSampleCanvas.height = 8;
+const ambSampleCtx = ambSampleCanvas.getContext('2d', { willReadFrequently: true });
+const ambTop = new THREE.Color(0xbfe3c8), ambBottom = new THREE.Color(0x2b1f14);
+let ambNextSample = 0, ambOk = AMBIENT_FROM_VIDEO;
+function updateDecorAmbient(nowSec, dt) {
+  hemiLight.color.lerp(ambTop, Math.min(1, dt * 0.6));
+  hemiLight.groundColor.lerp(ambBottom, Math.min(1, dt * 0.6));
+  if (!ambOk || !videoActive || decorVideo.readyState < 2 || nowSec < ambNextSample) return;
+  ambNextSample = nowSec + 15;
+  try {
+    const vw = decorVideo.videoWidth, vh = decorVideo.videoHeight;
+    ambSampleCtx.drawImage(decorVideo, vw * 0.25, vh * 0.15, vw * 0.5, vh * 0.7, 0, 0, 16, 8);
+    const d = ambSampleCtx.getImageData(0, 0, 16, 8).data;
+    const acc = [0, 0, 0, 0, 0, 0];
+    for (let y = 0; y < 8; y++) for (let x = 0; x < 16; x++) {
+      const i = (y * 16 + x) * 4, o = y < 4 ? 0 : 3;
+      acc[o] += d[i]; acc[o + 1] += d[i + 1]; acc[o + 2] += d[i + 2];
+    }
+    const n = 64 * 255;
+    const top = new THREE.Color().setRGB(acc[0] / n, acc[1] / n, acc[2] / n, THREE.SRGBColorSpace);
+    const bottom = new THREE.Color().setRGB(acc[3] / n, acc[4] / n, acc[5] / n, THREE.SRGBColorSpace);
+    if (top.r + top.g + top.b < 0.03) return;            // image noire (lecture impossible) : on garde les défauts
+    ambTop.copy(top).lerp(new THREE.Color(0xffffff), 0.25);   // une lumière d'ambiance, pas une copie du décor
+    ambBottom.copy(bottom).multiplyScalar(0.8);
+  } catch (e) { ambOk = false; }                          // image illisible (couche média…) : on n'insiste pas
+}
 
 // ===================== RAYONS DE LUMIÈRE VOLUMÉTRIQUES (god rays légers) =====================
 // Technique légère sans post-processing : texture en dégradé radial (longueur ET
@@ -1189,56 +1429,8 @@ ASSET_LIBRARY.forEach((entry) => {
   else if (entry.type === 'ksplat') loadKsplatCreature(entry);
 });
 
-// ===================== CYCLE D'ENVIRONNEMENTS (100% local, aucun appel réseau) =====================
+// ===================== ÉTAT AUDIO PARTAGÉ =====================
 let birdSongSound = null, streamSound = null, ambSound = null;
-let envCycleIndex = 0;
-let envTransitioning = false;
-
-// Sphère englobante réutilisée pour le fondu croisé entre décors (voir plus bas) :
-// on ne peut pas animer directement l'opacité de scene.background (ce n'est pas
-// un matériau), donc on fait apparaître le nouveau décor sur une grande sphère
-// semi-transparente qui entoure la caméra, puis on bascule scene.background une
-// fois le fondu terminé.
-let crossfadeMesh = null;
-function cycleEnvironment() {
-  if (envTransitioning) return;
-  envTransitioning = true;
-  envCycleIndex = (envCycleIndex + 1) % ENV_LIBRARY.length;
-  const env = ENV_LIBRARY[envCycleIndex];
-  log('Chargement du décor : ' + env.name + '...');
-  exrLoader.load(env.path, (tex) => {
-    tex.mapping = THREE.EquirectangularReflectionMapping;
-    tex.colorSpace = THREE.LinearSRGBColorSpace;
-
-    const CROSSFADE_DURATION = 1.8;
-    const sphere = new THREE.Mesh(
-      new THREE.SphereGeometry(90, 48, 32),
-      new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide, transparent: true, opacity: 0, depthWrite: false, fog: false })
-    );
-    scene.add(sphere);
-    crossfadeMesh = sphere;
-
-    fadeValueTo((v) => { sphere.material.opacity = v; }, 0, 1, CROSSFADE_DURATION, () => {
-      // Fondu terminé : bascule réelle du décor, libère l'ancienne texture et la sphère temporaire
-      const previous = scene.background;
-      scene.background = tex;
-      scene.environment = tex;
-      if (previous && previous.isTexture && previous !== tex) previous.dispose();
-      scene.remove(sphere);
-      sphere.geometry.dispose();
-      sphere.material.dispose();
-      crossfadeMesh = null;
-      log('Décor chargé : ' + env.name);
-      envTransitioning = false;
-    });
-  }, undefined, (e) => {
-    log('Erreur décor (' + env.path + '), fichier présent ? ' + e.message);
-    envTransitioning = false;
-  });
-}
-
-// Déclenchement : touche N (test desktop) ou gâchette d'un contrôleur Quest
-window.addEventListener('keydown', (e) => { if (e.key === 'n' || e.key === 'N') cycleEnvironment(); });
 
 // ===================== RÉGLAGE INTERACTIF D'ORIENTATION (temporaire, pour debug) =====================
 // Touches 7/8/9 : fait tourner le papillon de 90° sur X/Y/Z à chaque appui, et
@@ -1267,79 +1459,38 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'é' /* Shift+8 sur clavier FR (variable selon layout) */) nudgeOrientation('libellule-glb', 1);
 });
 
-// ===================== MENU DE SÉLECTION DU DÉCOR =====================
-// Étape avant l'entrée en VR/AR : grille de vignettes cliquables. Fonctionne
-// nativement avec le pointeur-contrôleur du navigateur Quest (pas besoin de
-// coder une navigation au joystick) et avec le tactile sur téléphone.
-function buildEnvMenu() {
-  const grid = document.getElementById('envGrid');
-  ENV_LIBRARY.forEach((env, i) => {
-    const card = document.createElement('div');
-    card.className = 'envCard';
-    card.style.backgroundColor = env.fallbackColor;
-    // Tente la vignette webp ; si absente, le dégradé de couleur de repli reste visible.
-    const testImg = new Image();
-    testImg.onload = () => { card.style.backgroundImage = `url('${env.thumb}')`; };
-    testImg.src = env.thumb;
-    const label = document.createElement('span');
-    label.textContent = env.name;
-    card.appendChild(label);
-    card.addEventListener('click', () => selectEnvironment(i));
-    grid.appendChild(card);
-  });
-}
-buildEnvMenu();
-
-function selectEnvironment(index) {
-  envCycleIndex = index;
-  const env = ENV_LIBRARY[index];
-  document.getElementById('envMenu').style.display = 'none';
-  document.getElementById('enterStep').style.display = 'block';
-  loadFill.style.width = '0%';
-  log('Chargement du décor : ' + env.name + '...');
-  exrLoader.load(env.path, (texture) => {
-    texture.mapping = THREE.EquirectangularReflectionMapping;
-    texture.colorSpace = THREE.LinearSRGBColorSpace;
-    scene.background = texture;
-    scene.environment = texture;
-    log('Décor chargé : ' + env.name);
-  }, (xhr) => {
-    if (xhr.total) loadFill.style.width = Math.min(100, (xhr.loaded/xhr.total*100)).toFixed(0) + '%';
-  }, (err) => log('Erreur EXR (' + env.path + '): ' + err.message));
-}
-
-document.getElementById('backToMenuBtn').addEventListener('click', () => {
-  document.getElementById('enterStep').style.display = 'none';
-  document.getElementById('envMenu').style.display = 'block';
-});
-
 // ===================== VR ENTRY =====================
 const vrButtonEl = VRButton.createButton(renderer);
 const arButtonEl = ARButton.createButton(renderer, { requiredFeatures: [], optionalFeatures: ['local-floor'] });
 document.body.appendChild(vrButtonEl);
 document.body.appendChild(arButtonEl);
-// Repositionne les deux boutons natifs côte à côte (par défaut ils se superposent)
 vrButtonEl.style.left = 'calc(50% - 130px)';
 arButtonEl.style.left = 'calc(50% + 10px)';
-document.getElementById('enterBtn').addEventListener('click', () => {
-  document.querySelector('#overlay').style.display = 'none';
-  startAmbience();
-  birdCycleLoop();
-  vrButtonEl.click();
-}, { once:true });
 
-document.getElementById('enterArBtn').addEventListener('click', () => {
-  document.querySelector('#overlay').style.display = 'none';
-  startAmbience();
-  birdCycleLoop();
-  arButtonEl.click();
-}, { once:true });
+function enterExperience(buttonEl) {
+  $('overlay').style.display = 'none';
+  startAmbience();      // sons de forêt (geste utilisateur : lecture autorisée)
+  birdCycleLoop();      // oiseaux + fiches Xeno-canto
+  decorVideo.play().catch(() => {});
+  revealDecor();        // fondu d'apparition (dès que la vidéo est prête)
+  buttonEl.click();
+}
+$('enterBtn').addEventListener('click', () => enterExperience(vrButtonEl), { once: true });
+$('enterArBtn').addEventListener('click', () => enterExperience(arButtonEl), { once: true });
 
-// Bascule jour/nuit via la gâchette d'un contrôleur Quest (select)
+// Début/fin de session : bascule entre la couche média (casque) et la sphère WebGL (repli)
 renderer.xr.addEventListener('sessionstart', () => {
-  const session = renderer.xr.getSession();
-  session.addEventListener('selectstart', () => cycleEnvironment());
+  mediaLayerMode = canUseMediaLayer(renderer.xr.getSession());
+  log(mediaLayerMode ? 'Décor : couche média WebXR' : 'Décor : sphère WebGL (couche média indisponible)');
+  if (mediaLayerMode && videoActive) attachMediaLayer(); else applyDecorDisplay();
+  revealDecor();
 });
+renderer.xr.addEventListener('sessionend', () => {
+  mediaLayerMode = false; mediaLayer = null; mediaBinding = null; // la session les emporte avec elle
+  applyDecorDisplay();
+});
+
+bootDecor();
 
 // ===================== ANIMATION =====================
 const clock = new THREE.Clock();
@@ -1347,6 +1498,8 @@ let t = 0;
 
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1);
+  updateTweens(dt);
+  updateDecorAmbient(performance.now() / 1000, dt);
   t += dt;
 
   // Oiseau : battement d'ailes plus lent, léger balancement
